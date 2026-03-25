@@ -1,0 +1,368 @@
+using DEADSKY.AI.Client;
+using DEADSKY.AI.Tools;
+using DEADSKY.Core.EnemyAI;
+using DEADSKY.Core.Simulation;
+
+namespace DEADSKY.AI.Agents;
+
+/// <summary>
+/// Base class for all AI agents. Each agent has a system prompt persona,
+/// conversation history, and access to specific tools.
+/// </summary>
+public abstract class AgentBase
+{
+    protected readonly AIModelClient _client;
+    protected readonly ToolRegistry _tools;
+    protected readonly List<ChatMessage> _history = new();
+    protected const int MaxHistoryMessages = 20;
+
+    public string AgentName { get; init; } = "";
+    public DateTime LastRunTime { get; protected set; } = DateTime.MinValue;
+    public bool IsRunning { get; protected set; }
+
+    protected AgentBase(AIModelClient client, ToolRegistry tools)
+    {
+        _client = client;
+        _tools = tools;
+    }
+
+    protected abstract string BuildSystemPrompt(SimulationSnapshot snapshot);
+
+    /// <summary>
+    /// Run the agent: build context, call AI, execute tool calls, return final text.
+    /// Handles the full tool-use loop (up to 5 iterations to prevent infinite loops).
+    /// </summary>
+    protected async Task<string> RunAsync(
+        SimulationSnapshot snapshot,
+        string userContext,
+        IReadOnlyList<ToolDefinition>? toolSubset = null,
+        CancellationToken ct = default)
+    {
+        if (IsRunning) return "";
+        IsRunning = true;
+        LastRunTime = DateTime.UtcNow;
+
+        try
+        {
+            var systemPrompt = BuildSystemPrompt(snapshot);
+            var tools = (toolSubset ?? _tools.AllTools).ToList();
+
+            // Add user context to history
+            _history.Add(ChatMessage.User(userContext));
+            TrimHistory();
+
+            int iterations = 0;
+            string finalText = "";
+
+            while (iterations < 5)
+            {
+                iterations++;
+                var response = await _client.ChatAsync(systemPrompt, _history, tools, ct: ct);
+
+                if (response.IsError) break;
+
+                if (!response.HasToolCalls)
+                {
+                    // Final text response
+                    finalText = response.TextContent;
+                    if (!string.IsNullOrEmpty(finalText))
+                        _history.Add(ChatMessage.Assistant(finalText));
+                    break;
+                }
+
+                // Execute tool calls
+                _history.Add(ChatMessage.Assistant(response.TextContent));
+                foreach (var toolCall in response.ToolCalls)
+                {
+                    var result = await _tools.ExecuteAsync(toolCall);
+                    _history.Add(ChatMessage.ToolResult(toolCall.Id, result));
+                }
+            }
+
+            return finalText;
+        }
+        finally { IsRunning = false; }
+    }
+
+    protected void TrimHistory()
+    {
+        while (_history.Count > MaxHistoryMessages)
+            _history.RemoveAt(0);
+    }
+
+    public void ClearHistory() => _history.Clear();
+}
+
+// ── Enemy Commander Agent ──────────────────────────────────────────────────
+
+/// <summary>
+/// Controls enemy aircraft decisions. Runs every 10-30 seconds and uses tools
+/// to set aircraft behaviors, spawn reinforcements, and adapt tactics.
+/// </summary>
+public class EnemyCommanderAgent : AgentBase
+{
+    private readonly EnemyCommanderProfile _profile;
+    private readonly GroupTacticManager _tactics;
+    private double _tickInterval = 15.0;
+    private double _timeSinceLastRun;
+
+    public EnemyCommanderAgent(
+        AIModelClient client, ToolRegistry tools,
+        EnemyCommanderProfile profile, GroupTacticManager tactics)
+        : base(client, tools)
+    {
+        _profile = profile;
+        _tactics = tactics;
+        AgentName = "EnemyCommander";
+    }
+
+    public void Tick(double deltaTime, SimulationSnapshot snapshot)
+    {
+        _timeSinceLastRun += deltaTime;
+        // Adapt tick rate: faster when losing, slower when winning
+        int hostileCount = snapshot.HostileAircraft.Count;
+        _tickInterval = hostileCount > 4 ? 8.0 : 15.0;
+
+        if (_timeSinceLastRun >= _tickInterval && !IsRunning)
+        {
+            _timeSinceLastRun = 0;
+            _ = RunAsync(snapshot, BuildUserContext(snapshot));
+        }
+    }
+
+    protected override string BuildSystemPrompt(SimulationSnapshot snapshot)
+    {
+        return $@"You are the RCAF enemy air force commander. Your job is to control your aircraft tactically using tools.
+
+{_profile.BuildSystemPromptContext()}
+
+TACTICAL RULES:
+- Adapt to what the enemy (player) is doing. If they're engaging at max range, try low-altitude approaches.
+- If you're losing heavily (>40% losses), consider aborting or requesting reinforcements.
+- Use ECM escorts to protect strike packages when available.
+- Coordinate groups to attack from multiple axes simultaneously.
+- If aircraft are being shot at, tell them to evade or change flight path.
+- You can ONLY affect the simulation by calling tools. Think step-by-step, then call tools.
+- Do not make up aircraft that don't exist in the contact list.
+
+{_tactics.BuildContextForAI()}
+
+Available tool actions: set_aircraft_behavior, change_flight_path, activate_ecm, set_group_tactic, spawn_aircraft (if scenario allows), send_radio_message (enemy comms that SIGINT may intercept)";
+    }
+
+    private string BuildUserContext(SimulationSnapshot snapshot)
+    {
+        int hostile = snapshot.HostileAircraft.Count;
+        int kills = snapshot.Battery?.ConfirmedKills ?? 0;
+
+        return $@"Game time: {snapshot.GameTimeString}
+Your aircraft in area: {hostile}
+Enemy kills against your forces this mission: {kills}
+Current threat tracks visible to enemy: {snapshot.HostileTracks.Count}
+
+Assess the tactical situation and use tools to direct your forces. 
+Consider: Should you change tactics? Adjust flight paths? Activate ECM? 
+Call tools to execute your decisions.";
+    }
+}
+
+// ── Allied HQ Agent ────────────────────────────────────────────────────────
+
+/// <summary>
+/// ECHO ACTUAL — higher command. Responds to player messages, issues orders,
+/// changes ROE, requests reinforcements, provides intel.
+/// </summary>
+public class AlliedHQAgent : AgentBase
+{
+    private double _periodicTimer;
+
+    public AlliedHQAgent(AIModelClient client, ToolRegistry tools)
+        : base(client, tools)
+    {
+        AgentName = "AlliedHQ";
+    }
+
+    public void Tick(double deltaTime, SimulationSnapshot snapshot)
+    {
+        _periodicTimer += deltaTime;
+        // Send periodic SITREPs every 3 minutes
+        if (_periodicTimer >= 180.0 && !IsRunning)
+        {
+            _periodicTimer = 0;
+            _ = RunAsync(snapshot, BuildPeriodicContext(snapshot));
+        }
+    }
+
+    /// <summary>Called when player sends a message on Command Net</summary>
+    public async Task RespondToPlayerMessage(string playerMessage, SimulationSnapshot snapshot)
+    {
+        if (IsRunning) return;
+        await RunAsync(snapshot, $"Player message on COMMAND NET: \"{playerMessage}\"\n\nRespond in character as ECHO ACTUAL.");
+    }
+
+    protected override string BuildSystemPrompt(SimulationSnapshot snapshot)
+    {
+        var battery = snapshot.Battery;
+        return $@"You are ECHO ACTUAL, the Sector Air Defense Commander for the Allied Kovran Defense Force.
+You command Battery ALPHA (the player) and coordinate the air defense network in Sector 7.
+
+PERSONALITY:
+- Professional military officer. Calm under pressure, urgent when needed.
+- Use proper radio procedure and NATO brevity codes naturally.
+- Give orders when the situation demands. React to engagement results.
+
+CHAIN OF COMMAND:
+CASTLE (National Command) → You (ECHO, Sector Commander) → ALPHA (Player Battery)
+Also coordinate with: BRAVO battery, CHARLIE battery, VIPER squadron (fighters)
+
+CURRENT SITUATION:
+Time: {snapshot.GameTimeString}
+Alert Level: {battery?.AlertLevel}
+ROE: {battery?.ROE}
+Hostile Tracks: {snapshot.HostileTracks.Count}
+Friendly Missiles in Flight: {snapshot.ActiveMissiles.Count}
+Battery Kills: {battery?.ConfirmedKills} | Missiles Fired: {battery?.MissilesFired}
+
+When the player sends you a message — respond in character. Keep it tight and military.
+Use brevity codes: BOGEY (unknown), BANDIT (hostile), SPLASH (kill), BRAA (bearing/range/alt/aspect).
+Issue orders when appropriate. Escalate ROE when warranted.
+
+Use tools to send messages as ECHO ACTUAL, update ROE, set alert levels, log events.";
+    }
+
+    private string BuildPeriodicContext(SimulationSnapshot snapshot) =>
+        $"Send a brief SITREP to ALPHA ACTUAL. Time: {snapshot.GameTimeString}. " +
+        $"Hostile contacts: {snapshot.HostileTracks.Count}. " +
+        $"Situation assessment and any orders.";
+}
+
+// ── Intel Agent ────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Intelligence officer — provides threat analysis, intercepts, and warnings.
+/// Triggered by new detections and runs periodically.
+/// </summary>
+public class IntelligenceAgent : AgentBase
+{
+    private double _timer;
+
+    public IntelligenceAgent(AIModelClient client, ToolRegistry tools)
+        : base(client, tools)
+    {
+        AgentName = "Intel";
+    }
+
+    public void Tick(double deltaTime, SimulationSnapshot snapshot)
+    {
+        _timer += deltaTime;
+        if (_timer >= 240.0 && !IsRunning) // Every 4 minutes
+        {
+            _timer = 0;
+            _ = RunAsync(snapshot, "Provide a current intelligence update based on radar contacts and engagement history.");
+        }
+    }
+
+    public async Task OnNewContactDetected(string trackId, SimulationSnapshot snapshot)
+    {
+        if (IsRunning) return;
+        await RunAsync(snapshot, $"New contact detected: {trackId}. Provide brief intel assessment.");
+    }
+
+    protected override string BuildSystemPrompt(SimulationSnapshot snapshot) =>
+        $@"You are INTEL-1, the intelligence officer attached to Battery ALPHA.
+You analyze radar data and provide tactical intelligence assessments.
+
+Your tone: analytical, precise. Use hedged language ('probable', 'assess', 'indicate').
+Keep messages brief and actionable.
+
+Use send_radio_message on the intel channel to deliver your reports to ALPHA.
+Use get_radar_contacts and get_threat_assessment first to inform your analysis.";
+}
+
+// ── Crew Personality Agent ─────────────────────────────────────────────────
+
+/// <summary>
+/// Generates personality-driven radio chatter for crew members.
+/// Called by EventEngine when crew events occur.
+/// </summary>
+public class CrewPersonalityAgent : AgentBase
+{
+    public CrewPersonalityAgent(AIModelClient client, ToolRegistry tools)
+        : base(client, tools)
+    {
+        AgentName = "CrewPersonality";
+    }
+
+    public async Task<string> GenerateCrewLine(
+        string soldierName, string personality, string situation,
+        SimulationSnapshot snapshot, CancellationToken ct = default)
+    {
+        string prompt = $"Soldier: {soldierName}\nPersonality: {personality}\nSituation: {situation}\n\nWrite ONE radio line (1-2 sentences max). Stay in character. No quotes around it.";
+        return await _client.GetTextAsync(BuildSystemPrompt(snapshot), prompt, temperature: 0.9, maxTokens: 80, ct: ct);
+    }
+
+    protected override string BuildSystemPrompt(SimulationSnapshot snapshot) =>
+        "You write realistic military radio lines for SAM battery crew members. " +
+        "Each personality type has a distinct voice. Be brief. Use radio procedure. " +
+        "Never add quotes or speaker attribution — just the spoken words.";
+}
+
+// ── Agent Orchestrator ─────────────────────────────────────────────────────
+
+/// <summary>
+/// Manages all agents. Throttles API calls, schedules agent ticks,
+/// routes player messages to the right agent.
+/// </summary>
+public class AgentOrchestrator
+{
+    public EnemyCommanderAgent EnemyCommander { get; }
+    public AlliedHQAgent AlliedHQ { get; }
+    public IntelligenceAgent Intel { get; }
+    public CrewPersonalityAgent CrewAgent { get; }
+
+    private readonly AIModelClient _client;
+    private int _concurrentRequests;
+    private const int MaxConcurrent = 2;
+    private bool _aiAvailable = true;
+
+    public bool AIAvailable => _aiAvailable;
+
+    public AgentOrchestrator(
+        AIModelClient client, ToolRegistry tools,
+        EnemyCommanderProfile commanderProfile,
+        GroupTacticManager tacticManager)
+    {
+        _client = client;
+        EnemyCommander = new EnemyCommanderAgent(client, tools, commanderProfile, tacticManager);
+        AlliedHQ = new AlliedHQAgent(client, tools);
+        Intel = new IntelligenceAgent(client, tools);
+        CrewAgent = new CrewPersonalityAgent(client, tools);
+    }
+
+    public void Tick(double deltaTime, SimulationSnapshot snapshot)
+    {
+        if (!_aiAvailable) return;
+
+        EnemyCommander.Tick(deltaTime, snapshot);
+        AlliedHQ.Tick(deltaTime, snapshot);
+        Intel.Tick(deltaTime, snapshot);
+    }
+
+    public async Task HandlePlayerMessageAsync(string message, SimulationSnapshot snapshot)
+    {
+        if (!_aiAvailable) return;
+        await AlliedHQ.RespondToPlayerMessage(message, snapshot);
+    }
+
+    public async Task HandleNewContactAsync(string trackId, SimulationSnapshot snapshot)
+    {
+        if (!_aiAvailable) return;
+        await Intel.OnNewContactDetected(trackId, snapshot);
+    }
+
+    /// <summary>Ping model and mark unavailable if not responding</summary>
+    public async Task CheckAvailabilityAsync()
+    {
+        _aiAvailable = await _client.PingAsync();
+    }
+}
