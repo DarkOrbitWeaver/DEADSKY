@@ -144,6 +144,23 @@ internal static class SimulationTestFactory
         }
     };
 
+    public static ScenarioDefinition CreateOperationScenarioWithObjectives()
+    {
+        var scenario = CreateMultiWaveScenario();
+        scenario.SectorMap = new SectorMapConfig
+        {
+            TheaterName = "Kovran Lowlands",
+            Objectives = new List<MapObjectiveConfig>
+            {
+                new() { Id = "depot", Name = "Kovran Depot", Description = "Fuel and munitions storage complex.", BearingDeg = 128, RangeNm = 58, Importance = "primary" },
+                new() { Id = "relay", Name = "Dunewatch Relay", Description = "Regional command relay station.", BearingDeg = 78, RangeNm = 88, Importance = "secondary" }
+            }
+        };
+        scenario.EnemyForces.Waves[0].TargetObjectiveId = "depot";
+        scenario.EnemyForces.Waves[1].TargetObjectiveId = "relay";
+        return scenario;
+    }
+
     public static SimulationEngine CreateLoadedSimulation(ScenarioDefinition? scenario = null)
     {
         var sim = new SimulationEngine();

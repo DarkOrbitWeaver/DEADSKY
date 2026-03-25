@@ -44,6 +44,7 @@ public class SAMMissile : Entity
     public bool HasDetonated { get; private set; }
     public bool WasKill { get; private set; }
     public Vec2? DetonationPosition { get; private set; }
+    public bool DetonationProcessed { get; set; }
 
     public SAMMissile()
     {
@@ -78,11 +79,16 @@ public class SAMMissile : Entity
         if (target == null || !GuidanceActive || HasDetonated) return;
 
         Vec2 targetVel = new(target.VelocityX, target.VelocityY);
-
-        double desiredHeading = MissileKinematics.CalculateProNavHeading(
-            Position, SpeedMps,
-            target.Position, targetVel,
-            HeadingDeg);
+        double missileGuideSpeed = Math.Max(SpeedMps, FlightModel.MaxSpeedMps * 0.7);
+        double remainingFlightTime = Math.Max(1.0, MaxFlightTimeSec - FlightTimeSec);
+        Vec2 interceptPoint = MissileKinematics.PredictIntercept(
+                Position,
+                missileGuideSpeed,
+                target.Position,
+                targetVel,
+                remainingFlightTime)
+            ?? target.Position;
+        double desiredHeading = Position.HeadingTo(interceptPoint);
 
         // Also try to match target altitude
         RequestedHeadingDeg = desiredHeading;

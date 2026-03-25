@@ -9,7 +9,7 @@ namespace DEADSKY.Backend.Tests;
 public class AIModelClientTests
 {
     [Fact]
-    public async Task ChatAsync_UsesReasoningContent_WhenContentIsBlank()
+    public async Task ChatAsync_PreservesReasoningContent_WithoutSurfacingItAsAssistantText()
     {
         var handler = new StubHttpMessageHandler(
             """
@@ -36,7 +36,7 @@ public class AIModelClientTests
             "system",
             new List<ChatMessage> { ChatMessage.User("status") });
 
-        Assert.Equal("ECHO, ALPHA. ROGER.", response.TextContent);
+        Assert.Equal(string.Empty, response.TextContent);
         Assert.Equal("ECHO, ALPHA. ROGER.", response.ReasoningContent);
     }
 

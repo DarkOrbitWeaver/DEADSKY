@@ -66,6 +66,7 @@ public class Aircraft : Entity
     // ── Threat awareness (what the aircraft "knows") ──────────────────
     public bool RadarLockDetected { get; set; }    // RWR is screaming
     public double RadarLockBearingDeg { get; set; }
+    public DateTime? RadarLockDetectedTime { get; set; }
     public bool MissileInbound { get; set; }
     public DateTime? MissileInboundDetectedTime { get; set; }
 
@@ -73,6 +74,8 @@ public class Aircraft : Entity
     private double _evasionTimer;
     private double _evasionTargetHeading;
     private double _evasionTargetAlt;
+    private AircraftBehavior? _behaviorBeforeThreatReaction;
+    private DateTime? _threatReactionUntilUtc;
 
     public Aircraft()
     {
@@ -94,6 +97,8 @@ public class Aircraft : Entity
             // Point away from battery
             RequestedHeadingDeg = (HeadingDeg + 180.0) % 360.0;
         }
+
+        RefreshThreatReactionState();
 
         // Execute behavior
         switch (CurrentBehavior)
@@ -137,6 +142,45 @@ public class Aircraft : Entity
         }
 
         base.Update(deltaTime);
+    }
+
+    private void RefreshThreatReactionState()
+    {
+        DateTime now = DateTime.UtcNow;
+        bool radarSpikeHot = RadarLockDetected &&
+                             RadarLockDetectedTime.HasValue &&
+                             now - RadarLockDetectedTime.Value <= TimeSpan.FromSeconds(4);
+        bool missileThreatHot = MissileInbound &&
+                                MissileInboundDetectedTime.HasValue &&
+                                now - MissileInboundDetectedTime.Value <= TimeSpan.FromSeconds(8);
+
+        ECMActive = HasECM && (radarSpikeHot || missileThreatHot);
+
+        if (missileThreatHot)
+        {
+            if (CurrentBehavior != AircraftBehavior.EvasiveManeuver)
+                _behaviorBeforeThreatReaction = CurrentBehavior;
+
+            CurrentBehavior = AircraftBehavior.EvasiveManeuver;
+            _threatReactionUntilUtc = now.AddSeconds(5);
+            return;
+        }
+
+        if (CurrentBehavior == AircraftBehavior.EvasiveManeuver &&
+            _behaviorBeforeThreatReaction.HasValue &&
+            _threatReactionUntilUtc.HasValue &&
+            now >= _threatReactionUntilUtc.Value)
+        {
+            CurrentBehavior = _behaviorBeforeThreatReaction.Value;
+            _behaviorBeforeThreatReaction = null;
+            _threatReactionUntilUtc = null;
+        }
+
+        if (!radarSpikeHot)
+            RadarLockDetected = false;
+
+        if (!missileThreatHot)
+            MissileInbound = false;
     }
 
     private void ExecuteIngress(double deltaTime)

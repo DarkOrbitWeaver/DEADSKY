@@ -1,10 +1,12 @@
 using System.Text.Json;
 using DEADSKY.AI.Client;
+using DEADSKY.Core.Campaign;
 using DEADSKY.Core.Comms;
 using DEADSKY.Core.Entities;
 using DEADSKY.Core.EnemyAI;
 using DEADSKY.Core.Physics;
 using DEADSKY.Core.Radar;
+using DEADSKY.Core.Scenario;
 using DEADSKY.Core.Simulation;
 
 namespace DEADSKY.AI.Tools;
@@ -17,17 +19,40 @@ public class ToolRegistry
 {
     private readonly SimulationEngine _sim;
     private readonly GroupTacticManager _tactics;
+    private readonly FriendlySupportDirector? _friendlySupport;
+    private readonly Func<ScenarioDefinition?>? _scenarioAccessor;
     private readonly Dictionary<string, Func<ToolCall, Task<string>>> _handlers;
     private readonly Dictionary<string, ToolDefinition> _definitions;
 
     public SimulationEngine Simulation => _sim;
     public IReadOnlyList<ToolDefinition> AllTools =>
         _definitions.Values.ToList();
+    public IReadOnlyList<ToolDefinition> EnemyCommanderTools => GetToolsByName(
+    [
+        "get_radar_contacts",
+        "get_contact_details",
+        "get_threat_assessment",
+        "get_support_status",
+        "send_radio_message",
+        "broadcast_open_frequency",
+        "set_group_tactic",
+        "spawn_aircraft",
+        "request_reinforcement",
+        "request_support_action",
+        "cancel_support_action",
+        "log_event"
+    ]);
 
-    public ToolRegistry(SimulationEngine sim, GroupTacticManager tactics)
+    public ToolRegistry(
+        SimulationEngine sim,
+        GroupTacticManager tactics,
+        FriendlySupportDirector? friendlySupport = null,
+        Func<ScenarioDefinition?>? scenarioAccessor = null)
     {
         _sim = sim;
         _tactics = tactics;
+        _friendlySupport = friendlySupport;
+        _scenarioAccessor = scenarioAccessor;
         _handlers = new();
         _definitions = new();
         RegisterAll();
@@ -43,6 +68,15 @@ public class ToolRegistry
             catch (Exception ex) { return $"{{\"error\":\"{ex.Message}\"}}"; }
         }
         return $"{{\"error\":\"Unknown tool: {call.Name}\"}}";
+    }
+
+    public IReadOnlyList<ToolDefinition> GetToolsByName(IEnumerable<string> names)
+    {
+        return names
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(name => _definitions.ContainsKey(name))
+            .Select(name => _definitions[name])
+            .ToList();
     }
 
     // ── Registration ──────────────────────────────────────────────────
@@ -83,6 +117,12 @@ public class ToolRegistry
             Array.Empty<string>(),
             GetAlliedPositions);
 
+        Register("get_support_status",
+            "Get status of friendly support actors and current availability.",
+            Array.Empty<(string, string)>(),
+            Array.Empty<string>(),
+            GetSupportStatus);
+
         // COMMUNICATIONS
         Register("send_radio_message",
             "Send a radio message on a specific channel as a character in the game.",
@@ -106,6 +146,18 @@ public class ToolRegistry
             },
             new[] { "alert_type", "message" },
             BroadcastAlert);
+
+        Register("broadcast_open_frequency",
+            "Send a message on open frequency as a hostile, civilian, or support actor.",
+            new[]
+            {
+                ("sender_callsign", "required: speaker name or callsign"),
+                ("message", "required: transmission content"),
+                ("intent", "required: warning|surrender|taunt|distress|panic"),
+                ("priority", "optional: flash|immediate|priority|routine")
+            },
+            new[] { "sender_callsign", "message", "intent" },
+            BroadcastOpenFrequency);
 
         // ENEMY BEHAVIOR CONTROL
         Register("set_aircraft_behavior",
@@ -218,6 +270,23 @@ public class ToolRegistry
             },
             new[] { "type", "urgency", "justification" },
             RequestReinforcement);
+
+        Register("request_support_action",
+            "Request a friendly support actor action such as picture relay, CAP diversion, or relay recovery.",
+            new[]
+            {
+                ("support_type", "required: picture|declare|cap|jam|relay|battery|awacs|sar"),
+                ("requestor", "required: who is requesting"),
+                ("details", "required: support reason or cue")
+            },
+            new[] { "support_type", "requestor", "details" },
+            RequestSupportAction);
+
+        Register("cancel_support_action",
+            "Cancel a previously tasked friendly support package.",
+            new[] { ("package_id", "required: support package id") },
+            new[] { "package_id" },
+            CancelSupportAction);
 
         Register("get_engagement_history",
             "History of all engagements this mission.",
@@ -396,7 +465,39 @@ public class ToolRegistry
                 var (brg, rng) = e.BearingRange;
                 return new { id = e.Id, designation = e.Designation, bearing = brg, range_nm = rng, status = e.Status.ToString() };
             }).ToList();
-        return Task.FromResult(JsonSerializer.Serialize(new { allied_units = friendly }));
+        IEnumerable<object> support = _friendlySupport == null
+            ? Array.Empty<object>()
+            : _friendlySupport.Packages.Select(package => (object)new
+            {
+                id = package.Id,
+                designation = package.Designation,
+                callsign = package.UnitCallsign,
+                status = package.Availability.ToString(),
+                visible = package.IsVisibleInPicture
+            });
+
+        return Task.FromResult(JsonSerializer.Serialize(new { allied_units = friendly, support_units = support }));
+    }
+
+    private Task<string> GetSupportStatus(ToolCall call)
+    {
+        if (_friendlySupport == null)
+            return Task.FromResult("{\"error\":\"support director unavailable\"}");
+
+        var payload = _friendlySupport.Packages.Select(package => new
+        {
+            package_id = package.Id,
+            type = package.Type.ToString(),
+            display_name = package.DisplayName,
+            callsign = package.UnitCallsign,
+            availability = package.Availability.ToString(),
+            delay_sec = Math.Round(package.DelayRemainingSec, 1),
+            cooldown_sec = Math.Round(package.CooldownRemainingSec, 1),
+            visible_in_picture = package.IsVisibleInPicture,
+            summary = package.LastSummary
+        });
+
+        return Task.FromResult(JsonSerializer.Serialize(new { support_packages = payload }));
     }
 
     private Task<string> SendRadioMessage(ToolCall call)
@@ -406,6 +507,7 @@ public class ToolRegistry
         var message = call.GetString("message");
         var priorityStr = call.GetString("priority", "routine");
         var recipient = call.GetString("recipient_callsign", "");
+        var messageTypeStr = call.GetString("message_type", "normal");
 
         var channel = channelStr.ToLower() switch
         {
@@ -425,19 +527,34 @@ public class ToolRegistry
             _ => MessagePriority.Routine
         };
 
-        var msg = new RadioMessage
+        var messageType = messageTypeStr.ToLowerInvariant() switch
         {
-            Channel = channel,
-            SenderCallsign = sender,
-            RecipientCallsign = string.IsNullOrEmpty(recipient) ? null : recipient,
-            Content = message,
-            Priority = priority,
-            Type = MessageType.Normal,
-            StaticLevel = 0.1 + SimulationRandom.Instance.NextDouble() * 0.1
+            "alert" => MessageType.Alert,
+            "status" => MessageType.StatusReport,
+            "intel" => MessageType.IntelUpdate,
+            "chatter" => MessageType.RadioChatter,
+            _ => MessageType.Normal
         };
 
+        var speaker = ResolveSpeaker(sender, channel);
+        var msg = CommManager.CreateMessage(
+            speaker,
+            channel,
+            message,
+            priority,
+            messageType,
+            recipient: string.IsNullOrEmpty(recipient) ? null : recipient,
+            canReply: channel is RadioChannel.CommandNet or RadioChannel.IntelNet or RadioChannel.OpenFreq,
+            staticLevel: 0.1 + SimulationRandom.Instance.NextDouble() * 0.1);
+
         _sim.Comms.Queue(msg);
-        return Task.FromResult("{\"status\":\"queued\"}");
+        return Task.FromResult(JsonSerializer.Serialize(new
+        {
+            status = "queued",
+            effective_channel = msg.Channel.ToString(),
+            effective_type = msg.Type.ToString(),
+            header = msg.DisplayHeader
+        }));
     }
 
     private Task<string> BroadcastAlert(ToolCall call)
@@ -448,16 +565,35 @@ public class ToolRegistry
 
         foreach (RadioChannel ch in Enum.GetValues<RadioChannel>())
         {
-            _sim.Comms.Queue(new RadioMessage
-            {
-                Channel = ch,
-                SenderCallsign = "ALERT",
-                Content = $"[{alertType.Replace('_', ' ').ToUpper()}] {message}",
-                Priority = priority,
-                Type = MessageType.Alert
-            });
+            _sim.Comms.Queue(CommManager.CreateMessage(
+                RadioRules.CreateSystemProfile("ALERT"),
+                ch,
+                $"[{alertType.Replace('_', ' ').ToUpper()}] {message}",
+                priority,
+                MessageType.Alert,
+                canReply: false,
+                staticLevel: 0.0));
         }
         return Task.FromResult("{\"status\":\"broadcast_sent_all_channels\"}");
+    }
+
+    private Task<string> BroadcastOpenFrequency(ToolCall call)
+    {
+        var sender = call.GetString("sender_callsign");
+        var message = call.GetString("message");
+        var intent = call.GetString("intent", "warning");
+        var priority = call.GetString("priority", "priority").ToLowerInvariant() switch
+        {
+            "flash" => MessagePriority.Flash,
+            "immediate" => MessagePriority.Immediate,
+            "routine" => MessagePriority.Routine,
+            _ => MessagePriority.Priority
+        };
+
+        var speaker = RadioRules.CreateEnemyProfile(sender, "HOSTILE OPEN", $"{intent.ToUpperInvariant()} TRAFFIC");
+        var msg = CommManager.CreateOpenFrequencyMessage(speaker, message, priority, canReply: true);
+        _sim.Comms.Queue(msg);
+        return Task.FromResult(JsonSerializer.Serialize(new { status = "queued", header = msg.DisplayHeader, channel = msg.Channel.ToString() }));
     }
 
     private Task<string> SetAircraftBehavior(ToolCall call)
@@ -491,9 +627,12 @@ public class ToolRegistry
         int changed = 0;
         if (entity != null)
         {
-            entity.CurrentBehavior = behavior;
-            if (aggressiveness >= 0) entity.AggressivenessLevel = aggressiveness;
-            changed = 1;
+            if (DoctrineRules.IsBehaviorAuthorized(entity, behavior))
+            {
+                entity.CurrentBehavior = behavior;
+                if (aggressiveness >= 0) entity.AggressivenessLevel = aggressiveness;
+                changed = 1;
+            }
         }
         else
         {
@@ -504,7 +643,11 @@ public class ToolRegistry
                 foreach (var aid in group.AircraftIds)
                 {
                     var a = _sim.Entities.Get(aid) as Aircraft;
-                    if (a != null) { a.CurrentBehavior = behavior; changed++; }
+                    if (a != null && DoctrineRules.IsBehaviorAuthorized(a, behavior))
+                    {
+                        a.CurrentBehavior = behavior;
+                        changed++;
+                    }
                 }
             }
         }
@@ -557,6 +700,19 @@ public class ToolRegistry
             "time_on_target" => GroupTactic.TimeOnTarget,
             _ => GroupTactic.StraightIngress
         };
+
+        var group = _tactics.GetGroup(groupId);
+        if (group == null)
+            return Task.FromResult("{\"error\":\"Group not found\"}");
+
+        var aircraft = group.AircraftIds
+            .Select(id => _sim.Entities.Get(id) as Aircraft)
+            .Where(a => a != null)
+            .Cast<Aircraft>()
+            .ToList();
+
+        if (!DoctrineRules.IsGroupTacticAuthorized(tactic, aircraft))
+            return Task.FromResult("{\"error\":\"Doctrine denied for this package composition\"}");
 
         _tactics.SetGroupTactic(groupId, tactic);
         return Task.FromResult($"{{\"group\":\"{groupId}\",\"tactic\":\"{tactic}\"}}");
@@ -662,6 +818,35 @@ public class ToolRegistry
         return Task.FromResult("{\"request_received\":true}");
     }
 
+    private Task<string> RequestSupportAction(ToolCall call)
+    {
+        if (_friendlySupport == null)
+            return Task.FromResult("{\"error\":\"support director unavailable\"}");
+
+        var supportType = call.GetString("support_type");
+        var requestor = call.GetString("requestor");
+        var details = call.GetString("details");
+        var result = _friendlySupport.RequestSupport(ParseSupportType(supportType), requestor, details, _sim.GameTimeSec);
+        return Task.FromResult(JsonSerializer.Serialize(new
+        {
+            accepted = result.Accepted,
+            summary = result.Summary,
+            package_id = result.PackageId,
+            eta_sec = result.EtaSec,
+            visible_support = result.VisibleSupport
+        }));
+    }
+
+    private Task<string> CancelSupportAction(ToolCall call)
+    {
+        if (_friendlySupport == null)
+            return Task.FromResult("{\"error\":\"support director unavailable\"}");
+
+        var packageId = call.GetString("package_id");
+        string summary = _friendlySupport.CancelSupport(packageId);
+        return Task.FromResult(JsonSerializer.Serialize(new { summary }));
+    }
+
     private Task<string> GetEngagementHistory(ToolCall call)
     {
         int n = call.GetInt("last_n", 10);
@@ -675,5 +860,32 @@ public class ToolRegistry
                 notes = e.Notes
             });
         return Task.FromResult(JsonSerializer.Serialize(new { engagements = history }));
+    }
+
+    private static FriendlySupportType ParseSupportType(string supportType) => supportType.ToLowerInvariant() switch
+    {
+        "picture" => FriendlySupportType.PictureRelay,
+        "declare" => FriendlySupportType.DeclarationCell,
+        "cap" => FriendlySupportType.CombatAirPatrol,
+        "jam" => FriendlySupportType.JammingSupport,
+        "relay" => FriendlySupportType.RelayRecovery,
+        "battery" => FriendlySupportType.NearbyBattery,
+        "awacs" => FriendlySupportType.Awacs,
+        "sar" => FriendlySupportType.SearchAndRescue,
+        _ => FriendlySupportType.PictureRelay
+    };
+
+    private static RadioSpeakerProfile ResolveSpeaker(string sender, RadioChannel channel)
+    {
+        string normalized = sender.ToUpperInvariant();
+        if (normalized.Contains("ECHO"))
+            return RadioRules.CreateAlliedHQProfile(normalized);
+        if (normalized.Contains("INTEL") || normalized.Contains("SIGINT"))
+            return RadioRules.CreateIntelProfile(normalized);
+        if (normalized.Contains("VIPER") || normalized.Contains("SABLE") || normalized.Contains("LANTERN") || normalized.Contains("BRAVO"))
+            return RadioRules.CreateFriendlySupportProfile(normalized, "SUPPORT", normalized, "NETWORK ACTOR");
+        if (channel == RadioChannel.OpenFreq || normalized.Contains("RAVEN") || normalized.Contains("HOSTILE"))
+            return RadioRules.CreateEnemyProfile(normalized, "HOSTILE NET", "ENEMY TRAFFIC");
+        return RadioRules.CreateCrewProfile(normalized);
     }
 }

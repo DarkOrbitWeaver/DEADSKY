@@ -8,10 +8,12 @@ namespace DEADSKY.Core.Simulation;
 
 public sealed class SimulationEngine : IDisposable
 {
+    private static readonly double[] SupportedRadarRangesNm = [40, 80, 120];
     private readonly System.Timers.Timer _timer;
     private readonly object _tickLock = new();
     private bool _running;
     private int _tickCount;
+    private DateTime? _pausedAtUtc;
 
     public EntityManager Entities { get; } = new();
     public RadarSystem Radar { get; } = new();
@@ -37,6 +39,13 @@ public sealed class SimulationEngine : IDisposable
 
     public void Start()
     {
+        if (_pausedAtUtc.HasValue)
+        {
+            var pausedDuration = DateTime.UtcNow - _pausedAtUtc.Value;
+            Radar.TrackManager.ShiftWallClock(pausedDuration);
+            _pausedAtUtc = null;
+        }
+
         _running = true;
         _timer.Start();
     }
@@ -45,6 +54,7 @@ public sealed class SimulationEngine : IDisposable
     {
         _running = false;
         _timer.Stop();
+        _pausedAtUtc ??= DateTime.UtcNow;
     }
 
     public void Dispose()
@@ -58,7 +68,9 @@ public sealed class SimulationEngine : IDisposable
         Pause();
         GameTimeSec = 0;
         _tickCount = 0;
+        _pausedAtUtc = DateTime.UtcNow;
         ResetWorld(scenario.PlayerBattery);
+        ApplyWeather(scenario.Weather);
 
         if (scenario.PlayerBattery is { } batteryCfg)
         {
@@ -67,6 +79,24 @@ public sealed class SimulationEngine : IDisposable
         }
 
         BuildSnapshot();
+    }
+
+    public void RefreshSnapshot()
+    {
+        lock (_tickLock)
+        {
+            BuildSnapshot();
+        }
+    }
+
+    public int FlushPendingComms(int maxMessages = 32)
+    {
+        lock (_tickLock)
+        {
+            int processed = Comms.ProcessQueue(maxMessages);
+            BuildSnapshot();
+            return processed;
+        }
     }
 
     public bool PlayerDesignate(string trackId)
@@ -112,7 +142,9 @@ public sealed class SimulationEngine : IDisposable
             return;
 
         battery.RadarMode = mode;
+        battery.RadarOnline = mode is not RadarMode.Silent and not RadarMode.Standby;
         Radar.SetMode(mode);
+        BuildSnapshot();
     }
 
     public void PlayerSetRadarRange(double rangeNm)
@@ -121,12 +153,34 @@ public sealed class SimulationEngine : IDisposable
         if (battery == null)
             return;
 
+        rangeNm = NormalizeRadarRange(rangeNm);
         battery.RadarRangeNm = rangeNm;
         Radar.SetRange(rangeNm);
+        BuildSnapshot();
     }
 
-    public RadioMessage PlayerSendMessage(RadioChannel channel, string content) =>
-        Comms.SendPlayerMessage(channel, content);
+    public static double NormalizeRadarRange(double rangeNm)
+    {
+        if (double.IsNaN(rangeNm) || double.IsInfinity(rangeNm))
+            return SupportedRadarRangesNm[1];
+
+        double best = SupportedRadarRangesNm[0];
+        double bestDistance = Math.Abs(rangeNm - best);
+        foreach (double candidate in SupportedRadarRangesNm)
+        {
+            double distance = Math.Abs(rangeNm - candidate);
+            if (distance < bestDistance)
+            {
+                best = candidate;
+                bestDistance = distance;
+            }
+        }
+
+        return best;
+    }
+
+    public RadioMessage PlayerSendMessage(RadioChannel channel, string content, string? recipient = null) =>
+        Comms.SendPlayerMessage(channel, content, recipient);
 
     public void SetAlertLevel(BatteryAlertLevel level)
     {
@@ -160,9 +214,9 @@ public sealed class SimulationEngine : IDisposable
             GameTimeSec += deltaTime;
 
             var battery = Entities.GetPlayerBattery();
+            Weapons.Update(deltaTime);
             Entities.UpdateAll(deltaTime);
             Radar.Update(deltaTime, Entities.GetActiveSnapshot(), Weather.PrecipitationMmHr, battery);
-            Weapons.Update(deltaTime);
             Comms.ProcessQueue();
 
             BuildSnapshot();
@@ -183,6 +237,16 @@ public sealed class SimulationEngine : IDisposable
         Radar.SetRange(battery.RadarRangeNm);
         Radar.SetMode(battery.RadarMode);
         BuildSnapshot();
+    }
+
+    private void ApplyWeather(WeatherConfig? config)
+    {
+        Weather.VisibilityNm = config?.VisibilityNm ?? 80;
+        Weather.CloudCeilingFt = config?.CloudCeilingFt ?? 25000;
+        Weather.PrecipitationMmHr = config?.PrecipitationMmHr ?? 0;
+        Weather.Description = config?.Description ?? "Clear";
+        Weather.WindSpeedKts = config?.WindSpeedKts ?? 8;
+        Weather.WindDirectionDeg = config?.WindDirectionDeg ?? 180;
     }
 
     private SAMBattery CreateBatteryFromConfig(PlayerBatteryConfig? config)

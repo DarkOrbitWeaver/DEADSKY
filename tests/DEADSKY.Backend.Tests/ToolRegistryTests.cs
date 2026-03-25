@@ -51,4 +51,21 @@ public class ToolRegistryTests
         Assert.Equal("INTEL-1", intelMessage.SenderCallsign);
         Assert.Equal(MessagePriority.Priority, intelMessage.Priority);
     }
+
+    [Fact]
+    public void EnemyCommanderTools_ExposeCommanderLevelControls_WithoutLowLevelFlightMicromanagement()
+    {
+        using var sim = SimulationTestFactory.CreateLoadedSimulation();
+        var tactics = new GroupTacticManager(sim.Entities);
+        var registry = new ToolRegistry(sim, tactics);
+
+        var toolNames = registry.EnemyCommanderTools.Select(tool => tool.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.Contains("set_group_tactic", toolNames);
+        Assert.Contains("request_support_action", toolNames);
+        Assert.Contains("request_reinforcement", toolNames);
+        Assert.DoesNotContain("change_flight_path", toolNames);
+        Assert.DoesNotContain("set_aircraft_behavior", toolNames);
+        Assert.DoesNotContain("activate_ecm", toolNames);
+    }
 }

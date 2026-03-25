@@ -187,20 +187,56 @@ public static class MissileKinematics
         Vec2 targetPos, Vec2 targetVelocity,
         double maxFlightTimeSec)
     {
-        // Iterative solution for intercept
-        double dt = 0.1;
-        Vec2 predictedTarget = targetPos;
+        if (missileSpeedMps <= 1.0)
+            return null;
 
-        for (double t = 0; t < maxFlightTimeSec; t += dt)
+        Vec2 relativePosition = targetPos - launchPos;
+        double targetSpeedSq = targetVelocity.Dot(targetVelocity);
+        double missileSpeedSq = missileSpeedMps * missileSpeedMps;
+
+        double a = targetSpeedSq - missileSpeedSq;
+        double b = 2.0 * relativePosition.Dot(targetVelocity);
+        double c = relativePosition.Dot(relativePosition);
+
+        double? interceptTime = SolvePositiveInterceptTime(a, b, c);
+        if (!interceptTime.HasValue)
+            return null;
+
+        double time = interceptTime.Value;
+        if (time <= 0 || time > maxFlightTimeSec)
+            return null;
+
+        return targetPos + targetVelocity * time;
+    }
+
+    private static double? SolvePositiveInterceptTime(double a, double b, double c)
+    {
+        const double epsilon = 1e-6;
+
+        if (Math.Abs(a) < epsilon)
         {
-            predictedTarget = targetPos + targetVelocity * t;
-            double distance = (predictedTarget - launchPos).Length;
-            double flightTime = distance / missileSpeedMps;
+            if (Math.Abs(b) < epsilon)
+                return null;
 
-            if (Math.Abs(flightTime - t) < 0.5)
-                return predictedTarget;
+            double linearTime = -c / b;
+            return linearTime > 0 ? linearTime : null;
         }
-        return null;
+
+        double discriminant = (b * b) - (4.0 * a * c);
+        if (discriminant < 0)
+            return null;
+
+        double sqrtDiscriminant = Math.Sqrt(discriminant);
+        double t1 = (-b - sqrtDiscriminant) / (2.0 * a);
+        double t2 = (-b + sqrtDiscriminant) / (2.0 * a);
+
+        double best = double.MaxValue;
+        if (t1 > 0)
+            best = t1;
+        if (t2 > 0 && t2 < best)
+            best = t2;
+
+        return best == double.MaxValue ? null : best;
     }
 
     /// <summary>

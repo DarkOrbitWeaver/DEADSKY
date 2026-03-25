@@ -9,8 +9,8 @@ public enum EngagementResult
     MissileInFlight,
     KillConfirmed,
     ProbableKill,
-    MissDirect,         // Missed due to maneuver
-    MissGuidanceLost,   // ECM or radar mode change broke guidance
+    MissDirect,
+    MissGuidanceLost,
     TargetLeftArea,
     AlreadyDestroyed
 }
@@ -25,7 +25,7 @@ public record EngagementRecord(
 
 /// <summary>
 /// Manages all weapon engagements. Handles the full cycle:
-/// Designate → Launch → Guide → Assess.
+/// Designate -> Launch -> Guide -> Assess.
 /// </summary>
 public class WeaponsSystem
 {
@@ -35,10 +35,9 @@ public class WeaponsSystem
     public List<EngagementRecord> EngagementHistory { get; } = new();
     public string LastError { get; private set; } = "";
 
-    // Events
     public event Action<SAMMissile, Entity>? MissileLaunched;
     public event Action<SAMMissile, Entity?, EngagementResult>? EngagementCompleted;
-    public event Action<string>? EngagementError; // Error message
+    public event Action<string>? EngagementError;
 
     public WeaponsSystem(EntityManager entities, TrackManager tracks)
     {
@@ -46,28 +45,30 @@ public class WeaponsSystem
         _tracks = tracks;
     }
 
-    // ── Main update ───────────────────────────────────────────────────
-
     /// <summary>Update all in-flight missiles. Call every simulation tick.</summary>
     public void Update(double deltaTime)
     {
-        var missiles = _entities.GetActiveMissiles();
+        var missiles = _entities.GetByType<SAMMissile>()
+            .Where(missile => !missile.DetonationProcessed)
+            .ToList();
         var battery = _entities.GetPlayerBattery();
+
+        UpdateThreatAwareness(battery, missiles);
 
         foreach (var missile in missiles)
         {
-            // Get target
             Entity? target = null;
             if (missile.TargetEntityId != null)
                 target = _entities.Get(missile.TargetEntityId);
 
-            // Guide missile
             if (target != null && target.IsActive && !missile.HasDetonated)
             {
-                // SARH: requires radar to be in STT on this target
                 if (missile.Guidance == GuidanceMode.SemiActiveRadar)
                 {
-                    bool radarIlluminating = battery?.DesignatedTargetId == target.Id;
+                    bool radarIlluminating = battery?.RadarOnline == true
+                        && battery.RadarMode == RadarMode.SingleTargetTrack
+                        && battery.DesignatedTargetId == target.Id;
+
                     if (!radarIlluminating)
                         missile.LoseGuidance();
                     else
@@ -83,15 +84,13 @@ public class WeaponsSystem
                 missile.LoseGuidance();
             }
 
-            // Check detonation
             if (missile.HasDetonated)
             {
                 ProcessDetonation(missile, target);
+                missile.DetonationProcessed = true;
             }
         }
     }
-
-    // ── Player commands ───────────────────────────────────────────────
 
     /// <summary>Designate (lock radar on) a track for engagement</summary>
     public bool DesignateTarget(string trackId)
@@ -115,7 +114,11 @@ public class WeaponsSystem
     public EngagementResult FireAtDesignated(SAMBattery battery, string trackId)
     {
         var track = _tracks.GetById(trackId);
-        if (track == null) { RaiseError("No designated target"); return EngagementResult.MissDirect; }
+        if (track == null)
+        {
+            RaiseError("No designated target");
+            return EngagementResult.MissDirect;
+        }
 
         Entity? target = track.EntityId != null ? _entities.Get(track.EntityId) : null;
         if (target == null || !target.IsActive)
@@ -124,7 +127,6 @@ public class WeaponsSystem
             return EngagementResult.AlreadyDestroyed;
         }
 
-        // Check engagement envelope
         double rangeNm = CoordinateSystem.MetersToNm(target.Position.Length);
         double altFt = CoordinateSystem.MToFt(target.AltitudeM);
 
@@ -137,37 +139,32 @@ public class WeaponsSystem
             return EngagementResult.MissDirect;
         }
 
-        // Get a ready launcher
         var launcher = battery.GetReadyLauncher();
         if (launcher == null)
         {
-            RaiseError("No launchers ready — still reloading");
+            RaiseError("No launchers ready - still reloading");
             return EngagementResult.MissDirect;
         }
 
-        // Check ROE
-        if (battery.ROE == RulesOfEngagement.WeaponsHold)
+        if (battery.ROE == RulesOfEngagement.WeaponsHold && !battery.IsUnderAttack)
         {
-            // Only allow if we're being directly attacked
-            if (!battery.IsUnderAttack)
-            {
-                RaiseError("WEAPONS HOLD — cannot engage");
-                return EngagementResult.MissDirect;
-            }
-        }
-        if (battery.ROE == RulesOfEngagement.WeaponsTight)
-        {
-            if (track.Classification != TrackClassification.Hostile &&
-                track.Classification != TrackClassification.AssumedHostile)
-            {
-                RaiseError("WEAPONS TIGHT — target not confirmed hostile");
-                return EngagementResult.MissDirect;
-            }
+            RaiseError("WEAPONS HOLD - cannot engage");
+            return EngagementResult.MissDirect;
         }
 
-        // LAUNCH
-        var missile = _entities.LaunchMissile(battery, launcher, target,
-            battery.CurrentMissileType, battery.MissileSingleShotPk);
+        if (battery.ROE == RulesOfEngagement.WeaponsTight
+            && track.Classification is not (TrackClassification.Hostile or TrackClassification.AssumedHostile))
+        {
+            RaiseError("WEAPONS TIGHT - target not confirmed hostile");
+            return EngagementResult.MissDirect;
+        }
+
+        var missile = _entities.LaunchMissile(
+            battery,
+            launcher,
+            target,
+            battery.CurrentMissileType,
+            battery.MissileSingleShotPk);
 
         track.IsBeingEngaged = true;
         track.AssignedMissileId = missile.Id;
@@ -186,50 +183,81 @@ public class WeaponsSystem
         {
             var result = FireAtDesignated(battery, trackId);
             results.Add(result);
-            if (result != EngagementResult.MissileInFlight) break;
+            if (result != EngagementResult.MissileInFlight)
+                break;
         }
+
         return results;
     }
 
-    // ── Detonation processing ─────────────────────────────────────────
+    private void UpdateThreatAwareness(SAMBattery? battery, IReadOnlyList<SAMMissile> missiles)
+    {
+        DateTime now = DateTime.UtcNow;
+
+        if (battery?.RadarMode == RadarMode.SingleTargetTrack &&
+            !string.IsNullOrWhiteSpace(battery.DesignatedTargetId) &&
+            _entities.Get(battery.DesignatedTargetId) is Aircraft lockedAircraft)
+        {
+            lockedAircraft.RadarLockDetected = true;
+            lockedAircraft.RadarLockDetectedTime = now;
+            lockedAircraft.RadarLockBearingDeg = lockedAircraft.Position.HeadingTo(battery.Position);
+        }
+
+        foreach (var missile in missiles)
+        {
+            if (!missile.IsActive || missile.HasDetonated || string.IsNullOrWhiteSpace(missile.TargetEntityId))
+                continue;
+
+            if (_entities.Get(missile.TargetEntityId) is not Aircraft threatenedAircraft)
+                continue;
+
+            threatenedAircraft.MissileInbound = true;
+            threatenedAircraft.MissileInboundDetectedTime = now;
+        }
+    }
 
     private void ProcessDetonation(SAMMissile missile, Entity? target)
     {
         var battery = _entities.GetPlayerBattery();
+        var preImpactTrack = target != null ? _tracks.GetByEntityId(target.Id) : null;
         EngagementResult result;
 
         if (missile.WasKill && target != null)
         {
             target.Status = EntityStatus.Destroyed;
             result = EngagementResult.KillConfirmed;
-            if (battery != null) battery.ConfirmedKills++;
-
-            // Drop the track — target is gone
-            if (target != null)
-                _tracks.DropTrackForEntity(target.Id);
+            if (battery != null)
+                battery.ConfirmedKills++;
         }
         else if (target != null && target.IsActive)
         {
-            // Miss — target can evade
             if (target is Aircraft aircraft)
                 aircraft.CurrentBehavior = AircraftBehavior.EvasiveManeuver;
+
             result = EngagementResult.MissDirect;
-            if (battery != null) battery.Misses++;
+            if (battery != null)
+                battery.Misses++;
         }
         else
         {
             result = EngagementResult.AlreadyDestroyed;
         }
 
-        // Update engagement tracking
         if (target != null)
         {
             target.IsBeingEngaged = false;
             target.EngagedByMissileId = null;
+
+            if (target is Aircraft aircraft)
+                aircraft.MissileInbound = false;
         }
 
-        // Update launcher state — launcher is already reloading (was set on launch)
-        // Clear launcher's missile reference
+        if (preImpactTrack != null)
+        {
+            preImpactTrack.IsBeingEngaged = false;
+            preImpactTrack.AssignedMissileId = null;
+        }
+
         if (battery != null)
         {
             var launcher = battery.Launchers.FirstOrDefault(l => l.ActiveMissileId == missile.Id);
@@ -237,9 +265,8 @@ public class WeaponsSystem
                 launcher.ActiveMissileId = null;
         }
 
-        var track = target != null ? _tracks.GetByEntityId(target.Id) : null;
         EngagementHistory.Add(new EngagementRecord(
-            TrackId: track?.TrackId ?? "UNKNOWN",
+            TrackId: preImpactTrack?.TrackId ?? "UNKNOWN",
             EntityId: target?.Id ?? "UNKNOWN",
             MissileId: missile.Id,
             LaunchTime: missile.SpawnTime,
@@ -247,35 +274,29 @@ public class WeaponsSystem
 
         EngagementCompleted?.Invoke(missile, target, result);
 
-        // Mark missile as inactive
+        if (result == EngagementResult.KillConfirmed && target != null)
+            _tracks.DropTrackForEntity(target.Id);
+
         missile.Status = EntityStatus.MissileSelfDestructed;
     }
 
-    // ── Query ─────────────────────────────────────────────────────────
-
     public double CalculatePk(SAMBattery battery, TrackFile track)
     {
-        // Base Pk from missile type
         double pk = battery.MissileSingleShotPk;
 
-        // Modifiers
-        // Range modifier: degrades at max and min range
         double maxRange = battery.MissileMaxRangeNm;
         double minRange = battery.MissileMinRangeNm;
         double rangeFactor = (track.RangeNm - minRange) / (maxRange - minRange);
         rangeFactor = Math.Clamp(rangeFactor, 0, 1);
-        // Peak Pk at 40% of max range, degrades toward extremes
         double rangeModifier = 1.0 - Math.Abs(rangeFactor - 0.4) * 0.5;
 
-        // ECM modifier
         var entity = track.EntityId != null ? _entities.Get(track.EntityId) : null;
         double ecmMod = 1.0;
         if (entity is Aircraft a && a.ECMActive && a.EcmPower > 0)
             ecmMod = 0.6;
 
-        // Altitude modifier
         double altFt = track.AltitudeFt;
-        double altMod = altFt < 500 ? 0.5 : 1.0; // Low altitude is harder
+        double altMod = altFt < 500 ? 0.5 : 1.0;
 
         return Math.Clamp(pk * rangeModifier * ecmMod * altMod, 0.05, 0.97);
     }

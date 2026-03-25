@@ -31,6 +31,7 @@ public class TrackFile
     public string TrackId { get; init; } = "";       // "TRK-0001"
     public string? EntityId { get; set; }             // Actual entity ID (null = ghost)
     public string TrackDesignation { get; set; } = "UNKNOWN"; // Best guess aircraft type
+    public string GroupLabel { get; set; } = "UNATTRIBUTED";
 
     // ── Classification ─────────────────────────────────────────────────
     public TrackClassification Classification { get; set; } = TrackClassification.Unknown;
@@ -58,6 +59,7 @@ public class TrackFile
     public DateTime TrackInitiatedTime { get; set; } = DateTime.UtcNow;
     public double TimeSinceLastDetectionSec =>
         (DateTime.UtcNow - LastDetectionTime).TotalSeconds;
+    internal bool DetectedThisUpdate { get; set; }
 
     // ── IFF state ─────────────────────────────────────────────────────
     public bool IFFInterrogated { get; set; }
@@ -86,34 +88,59 @@ public class TrackFile
     public void UpdateWithDetection(Vec2 truePosition, double trueAlt, double trueHeading, double trueSpeed, double radarNoise)
     {
         var rng = SimulationRandom.Instance;
+        var now = DateTime.UtcNow;
 
-        // Apply measurement noise to simulate radar imprecision
-        double noiseM = radarNoise * (1.0 + DetectionCount < 3 ? 2.0 : 1.0); // Noisier early
+        // Apply measurement noise, but tighten a designated/STT track so the
+        // operator sees a stable fire-control picture instead of a vibrating hit.
+        double noiseM = radarNoise * (DetectionCount < 2 ? 2.0 : 1.0);
+        if (DetectionCount >= 2)
+            noiseM *= 0.55;
+
+        if (IsDesignated)
+            noiseM *= 0.35;
         Vec2 noisyPos = new(
             truePosition.X + (rng.NextDouble() * 2 - 1) * noiseM,
             truePosition.Y + (rng.NextDouble() * 2 - 1) * noiseM);
+        double noisyAlt = trueAlt + (rng.NextDouble() * 2 - 1) * 50;
 
-        // Update estimated velocity from position delta
-        if (History.Count > 0)
+        double positionCorrection = DetectionCount switch
         {
-            double dt = (DateTime.UtcNow - History[^1].Time).TotalSeconds;
-            if (dt > 0.1)
-            {
-                Vec2 posDelta = noisyPos - History[^1].Position;
-                Velocity = posDelta / dt;
-                HeadingDeg = (Math.Atan2(Velocity.X, Velocity.Y) * 180.0 / Math.PI + 360) % 360;
-                SpeedMps = Velocity.Length;
-            }
-        }
+            0 => 1.0,
+            1 => 0.58,
+            _ when IsDesignated => 0.18,
+            _ => 0.32
+        };
 
-        Position = noisyPos;
+        double altitudeCorrection = DetectionCount == 0
+            ? 1.0
+            : IsDesignated
+                ? 0.22
+                : 0.45;
+
+        Vec2 filteredPos = DetectionCount == 0
+            ? noisyPos
+            : Position + (noisyPos - Position) * positionCorrection;
+
+        double filteredAlt = DetectionCount == 0
+            ? noisyAlt
+            : AltitudeM + (noisyAlt - AltitudeM) * altitudeCorrection;
+
+        // Use correlated kinematics to avoid deriving velocity from noisy hits.
+        Velocity = Vec2.FromHeading(trueHeading) * trueSpeed;
+        HeadingDeg = trueHeading;
+        SpeedMps = trueSpeed;
+
+        Position = filteredPos;
         AltitudeM = trueAlt + (rng.NextDouble() * 2 - 1) * 50; // ±50m altitude noise
-        PositionUncertaintyM = noiseM;
-        LastDetectionTime = DateTime.UtcNow;
+        AltitudeM = filteredAlt;
+        PositionUncertaintyM = Math.Max(75, noiseM * (IsDesignated ? 0.45 : 0.9));
+        LastDetectionTime = now;
         DetectionCount++;
         Quality = TrackQuality.Firm;
+        DetectedThisUpdate = true;
 
         History.Add(new TrackHistoryPoint(noisyPos, AltitudeM, DateTime.UtcNow));
+        History[^1] = new TrackHistoryPoint(filteredPos, AltitudeM, now);
         if (History.Count > MaxHistory)
             History.RemoveAt(0);
     }
@@ -180,30 +207,18 @@ public class TrackManager
         bool iffResponse, double radarNoise = RadarPositionNoise)
     {
         // Try to correlate with existing track
-        var existingTrack = FindCorrelatedTrack(entity.Position);
+        var existingTrack = GetByEntityId(entity.Id) ?? FindCorrelatedTrack(entity.Position);
 
         if (existingTrack != null)
         {
             // Update existing track
             existingTrack.EntityId = entity.Id;
+            existingTrack.GroupLabel = GuessGroupLabel(entity);
             existingTrack.UpdateWithDetection(
                 entity.Position, entity.AltitudeM,
                 entity.HeadingDeg, entity.SpeedMps, radarNoise);
 
-            if (iffResponse && !existingTrack.IFFInterrogated)
-            {
-                existingTrack.IFFInterrogated = true;
-                existingTrack.IFFResponse = true;
-                existingTrack.IFFTime = DateTime.UtcNow;
-                existingTrack.Classification = entity.Affiliation switch
-                {
-                    Affiliation.Hostile => TrackClassification.Hostile,
-                    Affiliation.Friendly => TrackClassification.Friendly,
-                    Affiliation.Civilian => TrackClassification.Civilian,
-                    Affiliation.Neutral => TrackClassification.Neutral,
-                    _ => TrackClassification.Unknown
-                };
-            }
+            UpdateClassification(existingTrack, entity, iffResponse);
 
             existingTrack.UpdateThreatAssessment();
             TrackUpdated?.Invoke(existingTrack);
@@ -217,6 +232,7 @@ public class TrackManager
                 TrackId = $"TRK-{_nextTrackNumber:D4}",
                 EntityId = entity.Id,
                 TrackDesignation = GuessDesignation(entity),
+                GroupLabel = GuessGroupLabel(entity),
                 Classification = TrackClassification.Unknown,
                 TrackInitiatedTime = DateTime.UtcNow
             };
@@ -226,18 +242,7 @@ public class TrackManager
                 entity.Position, entity.AltitudeM,
                 entity.HeadingDeg, entity.SpeedMps, radarNoise);
 
-            if (iffResponse)
-            {
-                track.IFFInterrogated = true;
-                track.IFFResponse = true;
-                track.Classification = entity.Affiliation switch
-                {
-                    Affiliation.Friendly => TrackClassification.Friendly,
-                    Affiliation.Civilian => TrackClassification.Civilian,
-                    Affiliation.Neutral => TrackClassification.Neutral,
-                    _ => TrackClassification.AssumedHostile
-                };
-            }
+            UpdateClassification(track, entity, iffResponse);
 
             track.UpdateThreatAssessment();
             _tracks[track.TrackId] = track;
@@ -256,8 +261,15 @@ public class TrackManager
 
         foreach (var track in _tracks.Values)
         {
-            track.Coast(deltaTime);
-            track.UpdateThreatAssessment();
+            if (track.DetectedThisUpdate)
+            {
+                track.DetectedThisUpdate = false;
+            }
+            else
+            {
+                track.Coast(deltaTime);
+                track.UpdateThreatAssessment();
+            }
 
             if (track.TimeSinceLastDetectionSec > TrackDropTimeSec)
                 toRemove.Add(track.TrackId);
@@ -310,7 +322,31 @@ public class TrackManager
         }
     }
 
-    public void Clear() => _tracks.Clear();
+    public void Clear()
+    {
+        _tracks.Clear();
+        _nextTrackNumber = 1;
+    }
+
+    public void ShiftWallClock(TimeSpan offset)
+    {
+        if (offset <= TimeSpan.Zero)
+            return;
+
+        foreach (var track in _tracks.Values)
+        {
+            track.LastDetectionTime = track.LastDetectionTime.Add(offset);
+            track.TrackInitiatedTime = track.TrackInitiatedTime.Add(offset);
+            if (track.IFFTime.HasValue)
+                track.IFFTime = track.IFFTime.Value.Add(offset);
+
+            for (int i = 0; i < track.History.Count; i++)
+            {
+                var point = track.History[i];
+                track.History[i] = point with { Time = point.Time.Add(offset) };
+            }
+        }
+    }
 
     // ── Private helpers ───────────────────────────────────────────────
 
@@ -338,4 +374,56 @@ public class TrackManager
             IncomingMissile m => m.MissileTypeName,
             _ => "UNKNOWN"
         };
+
+    private static string GuessGroupLabel(Entity entity) =>
+        entity switch
+        {
+            Aircraft a when !string.IsNullOrWhiteSpace(a.GroupId) => a.GroupId!,
+            IncomingMissile => "VAMPIRE TRACK",
+            _ => "UNATTRIBUTED"
+        };
+
+    private static void UpdateClassification(TrackFile track, Entity entity, bool iffResponse)
+    {
+        if (iffResponse)
+        {
+            track.IFFInterrogated = true;
+            track.IFFResponse = true;
+            track.IFFTime = DateTime.UtcNow;
+            track.Classification = entity.Affiliation switch
+            {
+                Affiliation.Friendly => TrackClassification.Friendly,
+                Affiliation.Civilian => TrackClassification.Civilian,
+                Affiliation.Neutral => TrackClassification.Neutral,
+                Affiliation.Hostile => TrackClassification.Hostile,
+                _ => TrackClassification.Unknown
+            };
+            track.ClassificationConfidence = 1.0;
+            return;
+        }
+
+        if (entity.Affiliation != Affiliation.Hostile)
+        {
+            track.ClassificationConfidence = Math.Max(track.ClassificationConfidence, 0.2);
+            return;
+        }
+
+        track.IFFInterrogated = true;
+        track.IFFResponse = false;
+        track.IFFTime = DateTime.UtcNow;
+
+        bool immediateHostile = entity is IncomingMissile
+            || entity.Type is EntityType.CruiseMissile or EntityType.SAMMissile;
+
+        if (immediateHostile || track.DetectionCount >= 3)
+        {
+            track.Classification = TrackClassification.Hostile;
+            track.ClassificationConfidence = 0.95;
+        }
+        else
+        {
+            track.Classification = TrackClassification.AssumedHostile;
+            track.ClassificationConfidence = Math.Max(track.ClassificationConfidence, 0.65);
+        }
+    }
 }

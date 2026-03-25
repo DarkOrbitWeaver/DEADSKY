@@ -28,6 +28,17 @@ public sealed class Soldier
     public HealthStatus Health { get; set; } = HealthStatus.Healthy;
 }
 
+public sealed class CrewMemberState
+{
+    public string SoldierId { get; set; } = "";
+    public string FullName { get; set; } = "";
+    public SoldierRole Role { get; set; }
+    public double Morale { get; set; } = 0.75;
+    public double Fear { get; set; } = 0.1;
+    public double Proficiency { get; set; } = 0.6;
+    public HealthStatus Health { get; set; } = HealthStatus.Healthy;
+}
+
 public sealed class CrewRoster
 {
     public List<Soldier> Soldiers { get; } = new();
@@ -38,11 +49,11 @@ public sealed class CrewRoster
         var roster = new CrewRoster();
         roster.Soldiers.AddRange(new[]
         {
-            new Soldier { FullName = "Capt. Nadia El Khatib", Role = SoldierRole.Commander, Proficiency = 0.86 },
-            new Soldier { FullName = "Sgt. Omar Saidi", Role = SoldierRole.RadarOperator, Proficiency = 0.78 },
-            new Soldier { FullName = "Cpl. Ilham Rahal", Role = SoldierRole.FireControl, Proficiency = 0.74 },
-            new Soldier { FullName = "Spc. Yassine Mourad", Role = SoldierRole.LauncherChief, Proficiency = 0.7 },
-            new Soldier { FullName = "Spc. Lina Aouad", Role = SoldierRole.Signals, Proficiency = 0.72 }
+            new Soldier { Id = "CMD-001", FullName = "Capt. Nadia El Khatib", Role = SoldierRole.Commander, Proficiency = 0.86 },
+            new Soldier { Id = "RAD-001", FullName = "Sgt. Omar Saidi", Role = SoldierRole.RadarOperator, Proficiency = 0.78 },
+            new Soldier { Id = "FCR-001", FullName = "Cpl. Ilham Rahal", Role = SoldierRole.FireControl, Proficiency = 0.74 },
+            new Soldier { Id = "LCH-001", FullName = "Spc. Yassine Mourad", Role = SoldierRole.LauncherChief, Proficiency = 0.7 },
+            new Soldier { Id = "SIG-001", FullName = "Spc. Lina Aouad", Role = SoldierRole.Signals, Proficiency = 0.72 }
         });
         return roster;
     }
@@ -88,5 +99,63 @@ public sealed class CrewRoster
             soldier.Morale = Math.Clamp(soldier.Morale - amount * 0.4, 0, 1);
             CrewEventOccurred?.Invoke(soldier, $"fear:{reason}");
         }
+    }
+
+    public IReadOnlyList<CrewMemberState> CaptureState() =>
+        Soldiers.Select(soldier => new CrewMemberState
+        {
+            SoldierId = soldier.Id,
+            FullName = soldier.FullName,
+            Role = soldier.Role,
+            Morale = soldier.Morale,
+            Fear = soldier.Fear,
+            Proficiency = soldier.Proficiency,
+            Health = soldier.Health
+        }).ToList();
+
+    public void ApplyState(IEnumerable<CrewMemberState> states)
+    {
+        foreach (var state in states)
+        {
+            var soldier = Soldiers.FirstOrDefault(s => s.Id.Equals(state.SoldierId, StringComparison.OrdinalIgnoreCase))
+                ?? Soldiers.FirstOrDefault(s => s.FullName.Equals(state.FullName, StringComparison.OrdinalIgnoreCase))
+                ?? Soldiers.FirstOrDefault(s => s.Role == state.Role);
+
+            if (soldier == null)
+                continue;
+
+            soldier.Morale = Math.Clamp(state.Morale, 0, 1);
+            soldier.Fear = Math.Clamp(state.Fear, 0, 1);
+            soldier.Proficiency = Math.Clamp(state.Proficiency, 0, 1);
+            soldier.Health = state.Health;
+        }
+    }
+
+    public void RecoverAfterMission(bool victory)
+    {
+        foreach (var soldier in Soldiers)
+        {
+            if (soldier.Health == HealthStatus.KIA)
+                continue;
+
+            double moraleRecovery = victory ? 0.04 : 0.01;
+            double fearRecovery = victory ? 0.08 : 0.04;
+            soldier.Morale = Math.Clamp(soldier.Morale + moraleRecovery, 0, 1);
+            soldier.Fear = Math.Clamp(soldier.Fear - fearRecovery, 0, 1);
+        }
+    }
+
+    public string BuildConditionSummary()
+    {
+        if (Soldiers.Count == 0)
+            return "CREW: NO ASSIGNED PERSONNEL";
+
+        double avgMorale = Soldiers.Average(s => s.Morale);
+        double avgFear = Soldiers.Average(s => s.Fear);
+        int wounded = Soldiers.Count(s => s.Health == HealthStatus.Wounded);
+        int shaken = Soldiers.Count(s => s.Health == HealthStatus.Shaken);
+        int kia = Soldiers.Count(s => s.Health == HealthStatus.KIA);
+
+        return $"CREW STATE: MORALE {avgMorale:P0} | FEAR {avgFear:P0} | SHAKEN {shaken} | WOUNDED {wounded} | KIA {kia}";
     }
 }

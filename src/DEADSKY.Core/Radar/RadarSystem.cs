@@ -35,7 +35,7 @@ public class RadarSystem
         double weatherPrecipitationMmHr = 0,
         SAMBattery? battery = null)
     {
-        if (!Model.IsOnline || Mode == RadarMode.Silent) return;
+        if (!Model.IsOnline || Mode is RadarMode.Silent or RadarMode.Standby) return;
 
         // Update sweep angle
         double sweepRateDeg = Mode == RadarMode.SingleTargetTrack ? 0.0 : Model.SweepRateDegSec;
@@ -121,9 +121,11 @@ public class RadarSystem
     public void SetMode(RadarMode mode, string? sttEntityId = null)
     {
         Mode = mode;
-        Model.IsOnline = mode != RadarMode.Silent;
+        Model.IsOnline = mode is not RadarMode.Silent and not RadarMode.Standby;
         if (mode == RadarMode.SingleTargetTrack)
             SingleTargetTrackEntityId = sttEntityId;
+        else if (mode != RadarMode.SingleTargetTrack)
+            SingleTargetTrackEntityId = null;
     }
 
     public void SetRange(double rangeNm)

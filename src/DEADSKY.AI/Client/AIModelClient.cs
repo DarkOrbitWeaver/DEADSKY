@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
+using System.Threading;
 
 namespace DEADSKY.AI.Client;
 
@@ -27,6 +28,7 @@ public class AIModelClient
 
     private readonly HttpClient _http;
     private readonly JsonSerializerOptions _jsonOpts;
+    private readonly SemaphoreSlim _requestGate = new(1, 1);
 
     public bool IsAvailable { get; private set; } = true;
     public int TotalRequestsMade { get; private set; }
@@ -96,8 +98,11 @@ public class AIModelClient
             requestBody["tool_choice"] = "auto";
         }
 
+        bool gateHeld = false;
         try
         {
+            await _requestGate.WaitAsync(ct);
+            gateHeld = true;
             var response = await _http.PostAsJsonAsync(ApiEndpoint, requestBody, _jsonOpts, ct);
             response.EnsureSuccessStatusCode();
 
@@ -109,6 +114,11 @@ public class AIModelClient
             TotalErrors++;
             IsAvailable = ex is not TaskCanceledException;
             return new AIResponse { Error = ex.Message, IsError = true };
+        }
+        finally
+        {
+            if (gateHeld)
+                _requestGate.Release();
         }
     }
 
@@ -168,8 +178,11 @@ public class AIModelClient
             ["stream"] = false
         };
 
+        bool gateHeld = false;
         try
         {
+            await _requestGate.WaitAsync(ct);
+            gateHeld = true;
             var response = await _http.PostAsJsonAsync(ApiEndpoint, requestBody, _jsonOpts, ct);
             response.EnsureSuccessStatusCode();
 
@@ -186,6 +199,11 @@ public class AIModelClient
             TotalErrors++;
             Console.Error.WriteLine($"[AI] structured-output error: {ex.Message}");
             return null;
+        }
+        finally
+        {
+            if (gateHeld)
+                _requestGate.Release();
         }
     }
 
@@ -245,12 +263,6 @@ public class AIModelClient
             reasoning.ValueKind != JsonValueKind.Null)
         {
             response.ReasoningContent = ExtractText(reasoning);
-        }
-
-        if (string.IsNullOrWhiteSpace(response.TextContent) &&
-            !string.IsNullOrWhiteSpace(response.ReasoningContent))
-        {
-            response.TextContent = response.ReasoningContent.Trim();
         }
 
         if (choice.TryGetProperty("tool_calls", out var toolCalls) &&

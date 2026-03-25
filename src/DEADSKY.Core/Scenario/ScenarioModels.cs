@@ -7,13 +7,30 @@ namespace DEADSKY.Core.Scenario;
 
 public sealed class ScenarioDefinition
 {
+    public string Key { get; set; } = "untitled";
     public string Name { get; set; } = "Untitled Scenario";
+    public string Archetype { get; set; } = "single_strike";
+    public string Category { get; set; } = "operation";
     public string Description { get; set; } = "";
     public double DurationMinutes { get; set; } = 10;
+    public bool IsTutorial { get; set; }
+    public bool IsRealisticMode { get; set; }
     public PlayerBatteryConfig PlayerBattery { get; set; } = new();
     public CommandConfig Command { get; set; } = new();
     public EnemyForcesConfig EnemyForces { get; set; } = new();
     public VictoryConditionsConfig VictoryConditions { get; set; } = new();
+    public SectorMapConfig SectorMap { get; set; } = new();
+    public WeatherConfig Weather { get; set; } = new();
+}
+
+public sealed class WeatherConfig
+{
+    public double VisibilityNm { get; set; } = 80;
+    public double CloudCeilingFt { get; set; } = 25000;
+    public double PrecipitationMmHr { get; set; }
+    public string Description { get; set; } = "Clear";
+    public double WindSpeedKts { get; set; } = 8;
+    public double WindDirectionDeg { get; set; } = 180;
 }
 
 public sealed class PlayerBatteryConfig
@@ -44,10 +61,39 @@ public sealed class EnemyForcesConfig
     public List<WaveConfig> Waves { get; set; } = new();
 }
 
+public sealed class SectorMapConfig
+{
+    public string TheaterName { get; set; } = "Kovran Lowlands";
+    public List<MapObjectiveConfig> Objectives { get; set; } = new();
+    public List<MapLandmarkConfig> Landmarks { get; set; } = new();
+}
+
+public sealed class MapObjectiveConfig
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public double BearingDeg { get; set; }
+    public double RangeNm { get; set; }
+    public string Importance { get; set; } = "primary";
+}
+
+public sealed class MapLandmarkConfig
+{
+    public string Name { get; set; } = "";
+    public double BearingDeg { get; set; }
+    public double RangeNm { get; set; }
+    public string Category { get; set; } = "terrain";
+}
+
 public sealed class WaveConfig
 {
     public string Trigger { get; set; } = "time";
     public double TimeMinutes { get; set; }
+    public string PackageName { get; set; } = "";
+    public string PackageRole { get; set; } = "strike";
+    public string EntryLabel { get; set; } = "";
+    public string TargetObjectiveId { get; set; } = "";
     public List<AircraftSpawnConfig> Aircraft { get; set; } = new();
 }
 
@@ -172,7 +218,9 @@ public sealed class ScenarioManager
 
     private void SpawnWave(int index, WaveConfig wave)
     {
-        string waveName = $"WAVE-{index + 1}";
+        string waveName = string.IsNullOrWhiteSpace(wave.PackageName)
+            ? $"WAVE-{index + 1}"
+            : wave.PackageName;
         int spawned = 0;
 
         foreach (var spawn in wave.Aircraft)
@@ -195,7 +243,11 @@ public sealed class ScenarioManager
         }
 
         _spawnedWaveIndices.Add(index);
-        OnWaveSpawned?.Invoke($"{waveName} ({spawned} hostile aircraft)");
+        string roleText = string.IsNullOrWhiteSpace(wave.PackageRole)
+            ? "hostile package"
+            : wave.PackageRole.Replace('_', ' ');
+        string entryText = string.IsNullOrWhiteSpace(wave.EntryLabel) ? "" : $" via {wave.EntryLabel}";
+        OnWaveSpawned?.Invoke($"{waveName} {roleText}{entryText} ({spawned} hostile aircraft)");
     }
 
     private void ResolveMission(MissionOutcome outcome, string reason)

@@ -1,7 +1,9 @@
 using DEADSKY.AI.Client;
 using DEADSKY.AI.Tools;
+using DEADSKY.Core.Campaign;
 using DEADSKY.Core.Comms;
 using DEADSKY.Core.EnemyAI;
+using DEADSKY.Core.Scenario;
 using DEADSKY.Core.Simulation;
 
 namespace DEADSKY.AI.Agents;
@@ -15,7 +17,7 @@ public abstract class AgentBase
     protected readonly AIModelClient _client;
     protected readonly ToolRegistry _tools;
     protected readonly List<ChatMessage> _history = new();
-    protected const int MaxHistoryMessages = 20;
+    protected const int MaxHistoryMessages = 10;
 
     public string AgentName { get; init; } = "";
     public DateTime LastRunTime { get; protected set; } = DateTime.MinValue;
@@ -53,33 +55,38 @@ public abstract class AgentBase
             _history.Add(ChatMessage.User(userContext));
             TrimHistory();
 
-            int iterations = 0;
             string finalText = "";
             bool usedTools = false;
+            var response = await _client.ChatAsync(systemPrompt, _history, tools, ct: ct);
 
-            while (iterations < 5)
+            if (!response.IsError)
             {
-                iterations++;
-                var response = await _client.ChatAsync(systemPrompt, _history, tools, ct: ct);
-
-                if (response.IsError) break;
-
                 if (!response.HasToolCalls)
                 {
-                    // Final text response
                     finalText = response.TextContent;
                     if (!string.IsNullOrEmpty(finalText))
                         _history.Add(ChatMessage.Assistant(finalText));
-                    break;
                 }
-
-                // Execute tool calls
-                usedTools = true;
-                _history.Add(ChatMessage.AssistantToolCalls(response.ToolCalls, response.TextContent));
-                foreach (var toolCall in response.ToolCalls)
+                else
                 {
-                    var result = await _tools.ExecuteAsync(toolCall);
-                    _history.Add(ChatMessage.ToolResult(toolCall.Id, result));
+                    usedTools = true;
+                    _history.Add(ChatMessage.AssistantToolCalls(response.ToolCalls, response.TextContent));
+                    foreach (var toolCall in response.ToolCalls)
+                    {
+                        var result = await _tools.ExecuteAsync(toolCall);
+                        _history.Add(ChatMessage.ToolResult(toolCall.Id, result));
+                    }
+
+                    // LM Studio's recommended OpenAI-compatible flow is:
+                    // first call with tools, then feed tool results back without tools enabled
+                    // so the model returns a final assistant response instead of continuing tool loops.
+                    var followUp = await _client.ChatAsync(systemPrompt, _history, tools: null, ct: ct);
+                    if (!followUp.IsError)
+                    {
+                        finalText = followUp.TextContent;
+                        if (!string.IsNullOrWhiteSpace(finalText))
+                            _history.Add(ChatMessage.Assistant(finalText));
+                    }
                 }
             }
 
@@ -96,6 +103,26 @@ public abstract class AgentBase
     }
 
     public void ClearHistory() => _history.Clear();
+
+    protected static string NormalizeRadioReply(string? text, int maxWords = 22)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        string compact = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).Trim();
+        if (compact.Length == 0)
+            return string.Empty;
+
+        int sentenceBreak = compact.IndexOfAny(new[] { '.', '!', '?' });
+        if (sentenceBreak >= 0 && sentenceBreak < compact.Length - 1)
+            compact = compact[..(sentenceBreak + 1)].Trim();
+
+        var words = compact.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length <= maxWords)
+            return compact;
+
+        return string.Join(" ", words, 0, maxWords).TrimEnd(',', ';', ':') + ".";
+    }
 }
 
 // ── Enemy Commander Agent ──────────────────────────────────────────────────
@@ -108,16 +135,19 @@ public class EnemyCommanderAgent : AgentBase
 {
     private readonly EnemyCommanderProfile _profile;
     private readonly GroupTacticManager _tactics;
+    private readonly Func<ScenarioDefinition?>? _scenarioAccessor;
     private double _tickInterval = 15.0;
     private double _timeSinceLastRun;
 
     public EnemyCommanderAgent(
         AIModelClient client, ToolRegistry tools,
-        EnemyCommanderProfile profile, GroupTacticManager tactics)
+        EnemyCommanderProfile profile, GroupTacticManager tactics,
+        Func<ScenarioDefinition?>? scenarioAccessor = null)
         : base(client, tools)
     {
         _profile = profile;
         _tactics = tactics;
+        _scenarioAccessor = scenarioAccessor;
         AgentName = "EnemyCommander";
     }
 
@@ -126,18 +156,18 @@ public class EnemyCommanderAgent : AgentBase
         _timeSinceLastRun += deltaTime;
         // Adapt tick rate: faster when losing, slower when winning
         int hostileCount = snapshot.HostileAircraft.Count;
-        _tickInterval = hostileCount > 4 ? 8.0 : 15.0;
+        _tickInterval = hostileCount > 4 ? 18.0 : 30.0;
 
         if (_timeSinceLastRun >= _tickInterval && !IsRunning)
         {
             _timeSinceLastRun = 0;
-            _ = RunAsync(snapshot, BuildUserContext(snapshot));
+            _ = RunAsync(snapshot, BuildUserContext(snapshot), _tools.EnemyCommanderTools);
         }
     }
 
     protected override string BuildSystemPrompt(SimulationSnapshot snapshot)
     {
-        return $@"You are the RCAF enemy air force commander. Your job is to control your aircraft tactically using tools.
+        return $@"You are the enemy air force commander. Your job is to control your aircraft tactically using tools.
 
 {_profile.BuildSystemPromptContext()}
 
@@ -147,12 +177,19 @@ TACTICAL RULES:
 - Use ECM escorts to protect strike packages when available.
 - Coordinate groups to attack from multiple axes simultaneously.
 - If aircraft are being shot at, tell them to evade or change flight path.
+- Respect doctrine rules. Use only tactics, behaviors, and radio traffic that fit the package role and current morale state.
 - You can ONLY affect the simulation by calling tools. Think step-by-step, then call tools.
+- Stay at commander level. Choose package tactic, timing, reinforcement, support requests, and radio intent.
+- Do not try to hand-fly aircraft, set per-aircraft headings, or micromanage ECM state.
 - Do not make up aircraft that don't exist in the contact list.
+
+{DoctrineRules.BuildAiGuidance(_scenarioAccessor?.Invoke(), snapshot, _profile)}
 
 {_tactics.BuildContextForAI()}
 
-Available tool actions: set_aircraft_behavior, change_flight_path, activate_ecm, set_group_tactic, spawn_aircraft (if scenario allows), send_radio_message (enemy comms that SIGINT may intercept)";
+{RadioRules.BuildGuidanceSummary()}
+
+Available tool actions: set_group_tactic, spawn_aircraft (if scenario allows), send_radio_message, broadcast_open_frequency, get_support_status, request_reinforcement, request_support_action, cancel_support_action, log_event.";
     }
 
     private string BuildUserContext(SimulationSnapshot snapshot)
@@ -179,11 +216,13 @@ Call tools to execute your decisions.";
 /// </summary>
 public class AlliedHQAgent : AgentBase
 {
+    private readonly FriendlySupportDirector? _friendlySupport;
     private double _periodicTimer;
 
-    public AlliedHQAgent(AIModelClient client, ToolRegistry tools)
+    public AlliedHQAgent(AIModelClient client, ToolRegistry tools, FriendlySupportDirector? friendlySupport = null)
         : base(client, tools)
     {
+        _friendlySupport = friendlySupport;
         AgentName = "AlliedHQ";
     }
 
@@ -202,14 +241,36 @@ public class AlliedHQAgent : AgentBase
     public async Task RespondToPlayerMessage(string playerMessage, SimulationSnapshot snapshot)
     {
         if (IsRunning) return;
-        var response = await RunAsync(snapshot,
-            $"Player message on COMMAND NET: \"{playerMessage}\"\n\nRespond in character as ECHO ACTUAL.");
+        IsRunning = true;
+        LastRunTime = DateTime.UtcNow;
 
-        if (!LastRunUsedTools && !string.IsNullOrWhiteSpace(response))
+        try
         {
+            string prompt = $@"Player transmission: ""{playerMessage}""
+Time: {snapshot.GameTimeString}
+Alert: {snapshot.Battery?.AlertLevel}
+ROE: {snapshot.Battery?.ROE}
+Hostile tracks: {snapshot.HostileTracks.Count}
+Missiles in flight: {snapshot.ActiveMissiles.Count}
+
+Reply as ECHO ACTUAL with one short radio transmission.";
+            var response = await _client.GetTextAsync(
+                BuildPlayerReplyPrompt(),
+                prompt,
+                temperature: 0.25,
+                maxTokens: 72);
+
+            response = NormalizeRadioReply(response, maxWords: 18);
+            if (string.IsNullOrWhiteSpace(response))
+                return;
+
             _tools.Simulation.Comms.Queue(CommManager.CreateAlliedHQMessage(
-                response.Trim(),
+                response,
                 MessagePriority.Priority));
+        }
+        finally
+        {
+            IsRunning = false;
         }
     }
 
@@ -240,8 +301,20 @@ When the player sends you a message — respond in character. Keep it tight and 
 Use brevity codes: BOGEY (unknown), BANDIT (hostile), SPLASH (kill), BRAA (bearing/range/alt/aspect).
 Issue orders when appropriate. Escalate ROE when warranted.
 
-Use tools to send messages as ECHO ACTUAL, update ROE, set alert levels, log events.";
+Friendly support actors available: {(_friendlySupport == null ? "no support board loaded" : _friendlySupport.BuildStatusBoard())}
+
+Use tools to send messages as ECHO ACTUAL, update ROE, set alert levels, request support actions, and log events.";
     }
+
+    private static string BuildPlayerReplyPrompt() =>
+        @"You are ECHO ACTUAL on military radio.
+Reply with exactly one short transmission.
+Rules:
+- Maximum 18 words.
+- One sentence only.
+- No bullet points, no analysis, no quotation marks.
+- Sound clipped, calm, and professional.
+- If the message is vague, ask one short follow-up question.";
 
     private string BuildPeriodicContext(SimulationSnapshot snapshot) =>
         $"Send a brief SITREP to ALPHA ACTUAL. Time: {snapshot.GameTimeString}. " +
@@ -297,10 +370,37 @@ public class IntelligenceAgent : AgentBase
     public async Task RespondToPlayerQuery(string playerMessage, SimulationSnapshot snapshot)
     {
         if (IsRunning) return;
-        var response = await RunAsync(snapshot,
-            $"Player message on INTEL NET: \"{playerMessage}\"\n\nAnswer as INTEL-1 with a concise assessment or warning.");
-        if (!LastRunUsedTools && !string.IsNullOrWhiteSpace(response))
-            _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response.Trim()));
+        IsRunning = true;
+        LastRunTime = DateTime.UtcNow;
+
+        try
+        {
+            string primary = snapshot.HostileTracks
+                .OrderByDescending(track => track.ThreatLevel)
+                .Select(track => $"{track.TrackId} {track.RangeNm:0.0}NM {track.AltitudeFt / 1000:0.0}kft")
+                .FirstOrDefault() ?? "none";
+            string prompt = $@"Player transmission: ""{playerMessage}""
+Time: {snapshot.GameTimeString}
+Hostile tracks: {snapshot.HostileTracks.Count}
+Primary track: {primary}
+
+Reply as INTEL-1 with one concise assessment or warning.";
+            var response = await _client.GetTextAsync(
+                BuildDirectIntelPrompt(),
+                prompt,
+                temperature: 0.2,
+                maxTokens: 72);
+
+            response = NormalizeRadioReply(response, maxWords: 20);
+            if (string.IsNullOrWhiteSpace(response))
+                return;
+
+            _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response));
+        }
+        finally
+        {
+            IsRunning = false;
+        }
     }
 
     protected override string BuildSystemPrompt(SimulationSnapshot snapshot) =>
@@ -312,6 +412,16 @@ Keep messages brief and actionable.
 
 Use send_radio_message on the intel channel to deliver your reports to ALPHA.
 Use get_radar_contacts and get_threat_assessment first to inform your analysis.";
+
+    private static string BuildDirectIntelPrompt() =>
+        @"You are INTEL-1 on military radio.
+Reply with exactly one concise transmission.
+Rules:
+- Maximum 20 words.
+- One sentence only.
+- No bullet points, no analysis dump, no quotation marks.
+- Use hedged language only when needed.
+- End with the most actionable part.";
 
     private async Task SendPeriodicIntelUpdateAsync(SimulationSnapshot snapshot)
     {
@@ -341,12 +451,13 @@ public class CrewPersonalityAgent : AgentBase
         SimulationSnapshot snapshot, CancellationToken ct = default)
     {
         string prompt = $"Soldier: {soldierName}\nPersonality: {personality}\nSituation: {situation}\n\nWrite ONE radio line (1-2 sentences max). Stay in character. No quotes around it.";
-        return await _client.GetTextAsync(BuildSystemPrompt(snapshot), prompt, temperature: 0.9, maxTokens: 80, ct: ct);
+        var response = await _client.GetTextAsync(BuildSystemPrompt(snapshot), prompt, temperature: 0.7, maxTokens: 56, ct: ct);
+        return NormalizeRadioReply(response, maxWords: 16);
     }
 
     protected override string BuildSystemPrompt(SimulationSnapshot snapshot) =>
         "You write realistic military radio lines for SAM battery crew members. " +
-        "Each personality type has a distinct voice. Be brief. Use radio procedure. " +
+        "Each personality type has a distinct voice. Be brief. Use radio procedure. Keep each line under 16 words. " +
         "Never add quotes or speaker attribution — just the spoken words.";
 }
 
@@ -371,11 +482,13 @@ public class AgentOrchestrator
     public AgentOrchestrator(
         AIModelClient client, ToolRegistry tools,
         EnemyCommanderProfile commanderProfile,
-        GroupTacticManager tacticManager)
+        GroupTacticManager tacticManager,
+        FriendlySupportDirector? friendlySupport = null,
+        Func<ScenarioDefinition?>? scenarioAccessor = null)
     {
         _client = client;
-        EnemyCommander = new EnemyCommanderAgent(client, tools, commanderProfile, tacticManager);
-        AlliedHQ = new AlliedHQAgent(client, tools);
+        EnemyCommander = new EnemyCommanderAgent(client, tools, commanderProfile, tacticManager, scenarioAccessor);
+        AlliedHQ = new AlliedHQAgent(client, tools, friendlySupport);
         Intel = new IntelligenceAgent(client, tools);
         CrewAgent = new CrewPersonalityAgent(client, tools);
     }

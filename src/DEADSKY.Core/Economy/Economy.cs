@@ -9,12 +9,31 @@ public sealed class BudgetSystem
         Balance += Math.Max(0, amount);
         Console.WriteLine($"[BUDGET] +{amount} OB ({reason}) => {Balance}");
     }
+
+    public bool CanAfford(int amount) => Balance >= Math.Max(0, amount);
+
+    public bool Spend(int amount, string reason)
+    {
+        int cost = Math.Max(0, amount);
+        if (Balance < cost)
+            return false;
+
+        Balance -= cost;
+        Console.WriteLine($"[BUDGET] -{cost} OB ({reason}) => {Balance}");
+        return true;
+    }
+
+    public void SetBalance(int balance)
+    {
+        Balance = Math.Max(0, balance);
+    }
 }
 
 public sealed class MissionReward
 {
     public int BaseReward { get; init; }
     public int EfficiencyBonus { get; init; }
+    public int ObjectiveModifier { get; init; }
     public int TotalReward => BaseReward + EfficiencyBonus;
 }
 
@@ -27,7 +46,8 @@ public static class MissionRewardCalculator
         bool crewHealthy,
         bool preventedBreakthrough,
         double hitRate,
-        int missionNumber)
+        int missionNumber,
+        int objectiveModifier = 0)
     {
         int bonus = kills * 500;
         bonus += (int)(hitRate * 2000);
@@ -35,11 +55,13 @@ public static class MissionRewardCalculator
         if (preventedBreakthrough) bonus += 1000;
         bonus += missionNumber * 100;
         if (missilesFired <= kills * 2) bonus += 500;
+        bonus += objectiveModifier;
 
         return new MissionReward
         {
             BaseReward = baseReward,
-            EfficiencyBonus = bonus
+            EfficiencyBonus = bonus,
+            ObjectiveModifier = objectiveModifier
         };
     }
 }

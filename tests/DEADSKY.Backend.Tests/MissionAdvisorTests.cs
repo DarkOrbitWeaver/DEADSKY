@@ -26,10 +26,12 @@ public class MissionAdvisorTests
     public void DescribeNextWave_ReturnsEta_ForUpcomingWave()
     {
         var scenario = SimulationTestFactory.CreateMultiWaveScenario();
+        scenario.EnemyForces.Waves[1].PackageName = "SHADE-2";
 
         var result = MissionAdvisor.DescribeNextWave(scenario, 30);
 
         Assert.Contains("ETA", result, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("AIRFRAME", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("SHADE-2", result, StringComparison.OrdinalIgnoreCase);
     }
 }

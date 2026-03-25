@@ -148,7 +148,7 @@ public class EntityManager
             foreach (var (id, entity) in _entities)
             {
                 if (entity.Status == EntityStatus.Destroyed &&
-                    (DateTime.UtcNow - entity.SpawnTime).TotalSeconds > 3.0 && // wait for death FX
+                    (DateTime.UtcNow - entity.StatusChangedUtc).TotalSeconds > 3.0 && // wait for death FX
                     entity.Type != EntityType.SAMBattery) // never remove the player battery
                 {
                     toRemove.Add(id);
@@ -203,10 +203,10 @@ public class EntityManager
             SpawnTime = DateTime.UtcNow
         };
 
+        missile.SyncPhysicsState();
         missile.RequestedSpeedMps = missile.FlightModel.MaxSpeedMps;
         missile.RequestedHeadingDeg = missile.HeadingDeg;
         missile.RequestedAltitudeM = target.AltitudeM;
-        missile.SyncPhysicsState();
 
         launcher.State = LauncherState.Reloading;
         launcher.ReloadProgress = 0;

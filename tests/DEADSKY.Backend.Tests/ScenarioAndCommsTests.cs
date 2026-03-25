@@ -36,4 +36,15 @@ public class ScenarioAndCommsTests
         Assert.Equal(0, comms.UnreadCount(RadioChannel.CommandNet));
         Assert.Equal(1, comms.UnreadCount(RadioChannel.IntelNet));
     }
+
+    [Fact]
+    public void CommManager_SendPlayerMessage_WithRecipient_ShowsTargetInCompactDescriptor()
+    {
+        var comms = new CommManager();
+
+        var message = comms.SendPlayerMessage(RadioChannel.CommandNet, "Request picture.", recipient: "ECHO ACTUAL");
+
+        Assert.Equal("ECHO ACTUAL", message.RecipientCallsign);
+        Assert.Contains("TO ECHO", message.SenderDescriptor, StringComparison.OrdinalIgnoreCase);
+    }
 }

@@ -35,9 +35,7 @@ public static class MissionAdvisor
                     ? "MISSION STANDBY"
                     : "AIRSPACE STABLE";
 
-        string objective = scenario?.VictoryConditions.Win ?? "Protect the battery and deny the raid.";
-        if (enemyBreakthroughs > 0 && scenario != null)
-            objective = $"BREAKTHROUGHS {enemyBreakthroughs}/{scenario.VictoryConditions.MaxEnemyBreakthroughs} | {scenario.VictoryConditions.Lose}";
+        string objective = BuildObjectiveStatus(snapshot, scenario, enemyBreakthroughs);
 
         string nextWave = DescribeNextWave(scenario, snapshot.GameTimeSec);
         string pressure = hostiles switch
@@ -87,7 +85,53 @@ public static class MissionAdvisor
 
         double etaSec = Math.Max(0, nextWave.TimeMinutes * 60 - gameTimeSec);
         int aircraftCount = nextWave.Aircraft.Sum(a => Math.Max(1, a.Count));
-        return $"NEXT WAVE: {aircraftCount} AIRFRAME ETA {etaSec / 60:0.0} MIN";
+        string packageName = string.IsNullOrWhiteSpace(nextWave.PackageName)
+            ? "WAVE"
+            : nextWave.PackageName.ToUpperInvariant();
+        return $"NEXT WAVE: {packageName} {aircraftCount} AIRFRAME ETA {etaSec / 60:0.0} MIN";
+    }
+
+    private static string BuildObjectiveStatus(SimulationSnapshot snapshot, ScenarioDefinition? scenario, int enemyBreakthroughs)
+    {
+        if (scenario == null)
+            return "Protect the battery and deny the raid.";
+
+        if (enemyBreakthroughs > 0)
+        {
+            return $"BREAKTHROUGHS {enemyBreakthroughs}/{scenario.VictoryConditions.MaxEnemyBreakthroughs} | {scenario.VictoryConditions.Lose}";
+        }
+
+        if (scenario.SectorMap.Objectives.Count == 0)
+            return scenario.VictoryConditions.Win;
+
+        var pressured = scenario.SectorMap.Objectives.FirstOrDefault(objective =>
+            snapshot.HostileTracks.Any(track =>
+                Math.Abs(NormalizeAngle(track.BearingDeg - objective.BearingDeg)) < 14 &&
+                track.RangeNm <= objective.RangeNm + 8));
+        if (pressured != null)
+            return $"OBJECTIVE: {pressured.Name.ToUpperInvariant()} UNDER ATTACK";
+
+        var shadowed = scenario.SectorMap.Objectives.FirstOrDefault(objective =>
+            snapshot.HostileTracks.Any(track =>
+                Math.Abs(NormalizeAngle(track.BearingDeg - objective.BearingDeg)) < 22 &&
+                track.RangeNm <= objective.RangeNm + 20));
+        if (shadowed != null)
+            return $"OBJECTIVE: {shadowed.Name.ToUpperInvariant()} THREATENED";
+
+        var targeted = scenario.SectorMap.Objectives.FirstOrDefault(objective =>
+            scenario.EnemyForces.Waves.Any(w => w.TargetObjectiveId.Equals(objective.Id, StringComparison.OrdinalIgnoreCase)));
+        if (targeted != null)
+            return $"OBJECTIVE: HOLD {targeted.Name.ToUpperInvariant()}";
+
+        return scenario.VictoryConditions.Win;
+    }
+
+    private static double NormalizeAngle(double degrees)
+    {
+        double normalized = degrees % 360;
+        if (normalized > 180) normalized -= 360;
+        if (normalized < -180) normalized += 360;
+        return normalized;
     }
 
     private static string BuildRecommendation(SimulationSnapshot snapshot, TrackFile? selectedTrack)

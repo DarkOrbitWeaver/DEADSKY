@@ -24,4 +24,11 @@ public sealed class PlayerProfile
             _ => PlayerRank.Lieutenant
         };
     }
+
+    public void LoadProgress(int missionsCompleted, int totalKills)
+    {
+        MissionsCompleted = Math.Max(0, missionsCompleted);
+        TotalKills = Math.Max(0, totalKills);
+        EvaluateRankPromotion();
+    }
 }

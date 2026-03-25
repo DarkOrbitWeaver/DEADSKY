@@ -43,7 +43,19 @@ public abstract class Entity
     public string Id { get; } = Guid.NewGuid().ToString("N")[..8].ToUpper();
     public EntityType Type { get; init; }
     public Affiliation Affiliation { get; set; }
-    public EntityStatus Status { get; set; } = EntityStatus.Active;
+    private EntityStatus _status = EntityStatus.Active;
+    public EntityStatus Status
+    {
+        get => _status;
+        set
+        {
+            if (_status == value)
+                return;
+
+            _status = value;
+            StatusChangedUtc = DateTime.UtcNow;
+        }
+    }
     public string Designation { get; init; } = "UNKNOWN"; // "SU-24", "MiG-29", "9M38"
     public string CallSign { get; set; } = "";
 
@@ -70,6 +82,7 @@ public abstract class Entity
     public bool ECMActive { get; set; }
     public double DamagePct { get; set; }   // 0=undamaged, 1=destroyed
     public DateTime SpawnTime { get; set; } = DateTime.UtcNow;
+    public DateTime StatusChangedUtc { get; private set; } = DateTime.UtcNow;
 
     // ── Track history (for radar trail) ──────────────────────────────
     public List<(Vec2 pos, double altitude, DateTime time)> PositionHistory { get; } = new();
@@ -119,11 +132,14 @@ public abstract class Entity
     public void SyncPhysicsState()
     {
         _position = Position;
-        _vx = VelocityX;
-        _vy = VelocityY;
         _heading = HeadingDeg;
         _altitude = AltitudeM;
         _speed = SpeedMps;
+        double headingRad = _heading * Math.PI / 180.0;
+        _vx = Math.Sin(headingRad) * _speed;
+        _vy = Math.Cos(headingRad) * _speed;
+        VelocityX = _vx;
+        VelocityY = _vy;
         RequestedHeadingDeg = HeadingDeg;
         RequestedAltitudeM = AltitudeM;
         RequestedSpeedMps = SpeedMps;
