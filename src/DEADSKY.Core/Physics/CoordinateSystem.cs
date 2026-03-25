@@ -66,15 +66,15 @@ public static class CoordinateSystem
     private const double MetersPerDegreeLat = 111320.0;
     private const double FeetPerMeter = 3.28084;
     private const double MetersPerNauticalMile = 1852.0;
-    private const double KtsToMps = 0.514444; // knots to meters/second
+    private const double KtsToMpsFactor = 0.514444; // knots to meters/second
     private const double FtToMeters = 0.3048;
 
     // ── Unit conversions ───────────────────────────────────────────────
 
     public static double NmToMeters(double nm) => nm * MetersPerNauticalMile;
     public static double MetersToNm(double m) => m / MetersPerNauticalMile;
-    public static double KtsToMps(double kts) => kts * KtsToMps;
-    public static double MpsToKts(double mps) => mps / KtsToMps;
+    public static double KtsToMps(double kts) => kts * KtsToMpsFactor;
+    public static double MpsToKts(double mps) => mps / KtsToMpsFactor;
     public static double FtToM(double ft) => ft * FtToMeters;
     public static double MToFt(double m) => m / FtToMeters;
     public static double DegToRad(double deg) => deg * Math.PI / 180.0;

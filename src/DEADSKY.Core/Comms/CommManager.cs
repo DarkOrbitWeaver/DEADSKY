@@ -1,3 +1,5 @@
+using DEADSKY.Core.Entities;
+
 namespace DEADSKY.Core.Comms;
 
 public enum RadioChannel
@@ -254,5 +256,3 @@ public static class BrevityCodes
         Codes.TryGetValue(code.ToUpperInvariant(), out var def) ? def : "Unknown brevity code";
 }
 
-// Reference SimulationRandom from Entities namespace
-using DEADSKY.Core.Entities;

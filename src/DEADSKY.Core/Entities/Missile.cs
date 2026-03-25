@@ -106,7 +106,7 @@ public class SAMMissile : Entity
     public void LoseGuidance()
     {
         GuidanceActive = false;
-        Phase = MissilePhase.Ballistic;
+        Phase = MissilePhase.Coast;
     }
 
     private void Detonate(bool kill, Vec2 position)
