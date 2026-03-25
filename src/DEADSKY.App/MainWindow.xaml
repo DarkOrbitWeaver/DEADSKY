@@ -71,6 +71,11 @@
                 <StackPanel>
                     <TextBlock Text="MISSION CONTROL" Style="{StaticResource HeaderText}"/>
                     <TextBlock Text="{Binding MissionName}" Style="{StaticResource PrimaryText}" Margin="0,6,0,2"/>
+                    <TextBlock Text="{Binding MissionPhaseText}" Style="{StaticResource HeaderText}" />
+                    <TextBlock Text="{Binding ObjectiveStatusText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding NextWaveText}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding SectorPressureText}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding RecommendationText}" Style="{StaticResource WarningText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                     <TextBlock Text="{Binding ThreatSummaryText}" Style="{StaticResource SmallText}" />
                     <TextBlock Text="{Binding WeatherSummary}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
                     <TextBlock Text="{Binding AlertLevelText, StringFormat=ALERT: {0}}" Style="{StaticResource WarningText}"/>
@@ -104,6 +109,8 @@
                     <TextBlock Text="{Binding ReadyLaunchers, StringFormat=READY LAUNCHERS: {0}}" Style="{StaticResource PrimaryText}" />
                     <TextBlock Text="{Binding ReserveMissiles, StringFormat=RESERVE MISSILES: {0}}" Style="{StaticResource PrimaryText}" />
                     <TextBlock Text="{Binding ConfirmedKills, StringFormat=CONFIRMED KILLS: {0}}" Style="{StaticResource PrimaryText}" />
+                    <TextBlock Text="{Binding SingleShotPkText}" Style="{StaticResource SmallText}" Margin="0,4,0,0"/>
+                    <TextBlock Text="{Binding SalvoPkText}" Style="{StaticResource SmallText}" />
                     <TextBlock Text="{Binding SelectedTrack.Classification, StringFormat=CLASS: {0}}" Style="{StaticResource SmallText}" Margin="0,4,0,0"/>
                     <TextBlock Text="{Binding SelectedTrack.AspectString, StringFormat=ASPECT: {0}}" Style="{StaticResource SmallText}" />
                     <TextBlock Text="{Binding SelectedTrack.RangeNm, StringFormat=RANGE: {0:F1} NM}" Style="{StaticResource SmallText}" />
@@ -205,12 +212,16 @@
                                 <Grid Margin="0,1">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="80"/>
-                                        <ColumnDefinition Width="55"/>
+                                        <ColumnDefinition Width="82"/>
+                                        <ColumnDefinition Width="48"/>
+                                        <ColumnDefinition Width="48"/>
+                                        <ColumnDefinition Width="58"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Text="{Binding DisplayName}" Style="{StaticResource PrimaryText}"/>
                                     <TextBlock Grid.Column="1" Text="{Binding RoleText}" Style="{StaticResource SmallText}"/>
-                                    <TextBlock Grid.Column="2" Text="{Binding Status}" Style="{StaticResource SmallText}" HorizontalAlignment="Right"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Morale, StringFormat=M {0:P0}}" Style="{StaticResource SmallText}" HorizontalAlignment="Right"/>
+                                    <TextBlock Grid.Column="3" Text="{Binding Fear, StringFormat=F {0:P0}}" Style="{StaticResource SmallText}" HorizontalAlignment="Right"/>
+                                    <TextBlock Grid.Column="4" Text="{Binding Status}" Style="{StaticResource SmallText}" HorizontalAlignment="Right"/>
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
@@ -259,6 +270,7 @@
                     <Button Content="WEAP FREE" Style="{StaticResource MilButton}" Margin="6,0,0,0" Command="{Binding SendQuickCommandCommand}" CommandParameter="weapons_free"/>
                     <Button Content="SITREP" Style="{StaticResource MilButton}" Margin="6,0,0,0" Command="{Binding SendQuickCommandCommand}" CommandParameter="status"/>
                     <Button Content="INTEL" Style="{StaticResource MilButton}" Margin="6,0,0,0" Command="{Binding SendQuickCommandCommand}" CommandParameter="intel"/>
+                    <TextBlock Text="{Binding RecommendationText}" Style="{StaticResource SmallText}" Margin="12,5,0,0" Width="520" TextWrapping="Wrap"/>
                 </WrapPanel>
                 <Grid Grid.Row="3" Margin="8,0,8,8">
                     <Grid.ColumnDefinitions>

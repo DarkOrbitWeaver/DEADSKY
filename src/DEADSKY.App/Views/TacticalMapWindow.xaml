@@ -36,6 +36,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
@@ -43,8 +44,13 @@
                 <StackPanel>
                     <TextBlock Text="SECTOR NOTES" Style="{StaticResource HeaderText}"/>
                     <TextBlock Text="{Binding MissionName}" Style="{StaticResource PrimaryText}" Margin="0,6,0,0"/>
+                    <TextBlock Text="{Binding MissionPhaseText}" Style="{StaticResource HeaderText}" Margin="0,4,0,0"/>
                     <TextBlock Text="{Binding ThreatSummaryText}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
                     <TextBlock Text="{Binding WeatherSummary}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding ObjectiveStatusText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                    <TextBlock Text="{Binding NextWaveText}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding SectorPressureText}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding RecommendationText}" Style="{StaticResource WarningText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                     <TextBlock Text="Lore: Sable Ridge masks low flyers, Vanta River channels ingress lanes, and the Kovran Depot is the strike package objective." Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
                 </StackPanel>
             </Border>
@@ -56,25 +62,37 @@
                     <TextBlock Text="{Binding SelectedTrackBraa}" Style="{StaticResource SmallText}" />
                     <TextBlock Text="{Binding SelectedTrackThreatText}" Style="{StaticResource SmallText}" />
                     <TextBlock Text="{Binding SelectedTrackEnvelopeText}" Style="{StaticResource SmallText}" />
+                    <TextBlock Text="{Binding SingleShotPkText}" Style="{StaticResource SmallText}" Margin="0,6,0,0"/>
+                    <TextBlock Text="{Binding SalvoPkText}" Style="{StaticResource SmallText}" />
                     <TextBlock Text="{Binding RadarCursorReadout}" Style="{StaticResource SmallText}" Margin="0,8,0,0"/>
                 </StackPanel>
             </Border>
 
-            <Border Grid.Row="2" Style="{StaticResource MilPanel}" Padding="10">
+            <Border Grid.Row="2" Style="{StaticResource MilPanel}" Padding="10" Margin="0,0,0,10">
                 <StackPanel>
-                    <TextBlock Text="TOP THREATS" Style="{StaticResource HeaderText}" />
-                    <ItemsControl ItemsSource="{Binding ThreatBoardTracks}" Margin="0,8,0,0">
+                    <TextBlock Text="BATTERY STATUS" Style="{StaticResource HeaderText}" />
+                    <TextBlock Text="{Binding BatterySummaryText}" Style="{StaticResource SmallText}" Margin="0,6,0,0"/>
+                    <TextBlock Text="{Binding AlertLevelText, StringFormat=ALERT {0}}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding RoeText, StringFormat=ROE {0}}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding AiStatusText, StringFormat=AI {0}}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="3" Style="{StaticResource MilPanel}" Padding="10">
+                <StackPanel>
+                    <TextBlock Text="OPS FEED" Style="{StaticResource HeaderText}" />
+                    <ItemsControl ItemsSource="{Binding OpsFeed}" Margin="0,8,0,0">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Grid Margin="0,1">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="70"/>
+                                        <ColumnDefinition Width="56"/>
+                                        <ColumnDefinition Width="64"/>
                                         <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="58"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Text="{Binding TrackId}" Style="{StaticResource SmallText}" Foreground="{Binding RowBrush}"/>
-                                    <TextBlock Grid.Column="1" Text="{Binding Designation}" Style="{StaticResource SmallText}" Foreground="{Binding RowBrush}"/>
-                                    <TextBlock Grid.Column="2" Text="{Binding RangeText}" Style="{StaticResource SmallText}" Foreground="{Binding RowBrush}" HorizontalAlignment="Right"/>
+                                    <TextBlock Text="{Binding TimeText}" Style="{StaticResource SmallText}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Category}" Style="{StaticResource HeaderText}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Message}" Style="{StaticResource SmallText}" TextWrapping="Wrap"/>
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

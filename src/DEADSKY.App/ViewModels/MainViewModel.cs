@@ -8,6 +8,7 @@ using DEADSKY.AI.Agents;
 using DEADSKY.AI.Client;
 using DEADSKY.AI.Tools;
 using DEADSKY.Audio;
+using DEADSKY.Core.Campaign;
 using DEADSKY.Core.Comms;
 using DEADSKY.Core.Economy;
 using DEADSKY.Core.Entities;
@@ -57,6 +58,13 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _selectedTrackEnvelopeText = "ENGAGEMENT WINDOW: STANDBY";
     [ObservableProperty] private string _radarCursorReadout = "CURSOR BRAA: ---";
     [ObservableProperty] private string _weatherSummary = "WX CLR | VIS 80NM | CEIL 25000FT";
+    [ObservableProperty] private string _missionPhaseText = "MISSION PHASE: STANDBY";
+    [ObservableProperty] private string _objectiveStatusText = "OBJECTIVE: AWAITING BRIEFING";
+    [ObservableProperty] private string _nextWaveText = "NEXT WAVE: NONE";
+    [ObservableProperty] private string _recommendationText = "RECOMMENDATION: MAINTAIN SEARCH PATTERN";
+    [ObservableProperty] private string _sectorPressureText = "SECTOR PRESSURE: LOW";
+    [ObservableProperty] private string _singleShotPkText = "PK: STANDBY";
+    [ObservableProperty] private string _salvoPkText = "SALVO PK: STANDBY";
     [ObservableProperty] private int _commandUnreadCount;
     [ObservableProperty] private int _batteryUnreadCount;
     [ObservableProperty] private int _intelUnreadCount;
@@ -79,6 +87,7 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<RadioMessage> BatteryNetMessages { get; } = new();
     public ObservableCollection<RadioMessage> IntelNetMessages { get; } = new();
     public ObservableCollection<RadioMessage> AllMessagesRecent { get; } = new();
+    public ObservableCollection<OpsFeedItem> OpsFeed { get; } = new();
 
     // ── Launcher states ────────────────────────────────────────────────
     public ObservableCollection<LauncherViewModel> LauncherStates { get; } = new();
@@ -97,6 +106,7 @@ public partial class MainViewModel : ObservableObject
     public string ThreatSummaryText => HostileCount == 0
         ? "AIR PICTURE CLEAN"
         : $"{HostileCount} HOSTILE / {TrackCount} TRACKS";
+    public string BatterySummaryText => $"BATTERY: {ReadyLaunchers} READY / {ReserveMissiles} RESERVE / {ConfirmedKills} SPLASH";
 
     // ── Constructor ───────────────────────────────────────────────────
 
@@ -138,7 +148,12 @@ public partial class MainViewModel : ObservableObject
         Crew.CrewEventOccurred += OnCrewEvent;
         Events.EventFired += OnGameEventFired;
 
-        Scenario.OnWaveSpawned += wave => SetStatus($"NEW THREAT: {wave}");
+        Scenario.OnWaveSpawned += wave =>
+        {
+            DispatchToUI(() => SetStatus($"NEW THREAT: {wave}"));
+            LogOps("WAVE", wave);
+            Sim.Comms.Queue(CommManager.CreateInterceptMessage($"RAVEN ACTUAL coordinating {wave}."));
+        };
         Scenario.OnMissionComplete += (outcome, reason) =>
             DispatchToUI(() => OnMissionEnd(outcome, reason));
     }
@@ -158,6 +173,9 @@ public partial class MainViewModel : ObservableObject
         SetStatus(available
             ? $"AI ONLINE — {AIModelClient.ModelIdentifier}"
             : "AI OFFLINE — running without AI");
+        LogOps("AI", available
+            ? $"LM Studio link established to {AIModelClient.ModelIdentifier}."
+            : "LM Studio link unavailable. Running offline.");
 
         // Hook AI into sim tick
         Sim.OnTickForAI = snapshot => AI.Tick(0.05, snapshot);
@@ -190,9 +208,12 @@ public partial class MainViewModel : ObservableObject
         SetStatus(AiAvailable
             ? $"AI LINK CONFIRMED — {AIModelClient.ModelIdentifier}"
             : "AI LINK LOST — CHECK LM STUDIO SERVER");
+        LogOps("AI", AiAvailable
+            ? $"AI link confirmed for {AIModelClient.ModelIdentifier}."
+            : "AI link lost. Operators reverting to fallback routines.");
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanStartMission))]
     public void StartMission()
     {
         if (SimulationRunning) return;
@@ -201,9 +222,12 @@ public partial class MainViewModel : ObservableObject
         SetStatus("MISSION ACTIVE");
         Audio.Play(SoundEvent.SystemOnline);
         RefreshCommandStates();
+        LogOps("MISSION", "Battery transitioned to active combat operations.");
     }
 
-    [RelayCommand]
+    private bool CanStartMission() => CurrentSnapshot != null && !SimulationRunning;
+
+    [RelayCommand(CanExecute = nameof(CanPauseMission))]
     public void PauseMission()
     {
         if (!SimulationRunning) return;
@@ -211,7 +235,10 @@ public partial class MainViewModel : ObservableObject
         SimulationRunning = false;
         SetStatus("MISSION PAUSED");
         RefreshCommandStates();
+        LogOps("MISSION", "Battery paused for command review.");
     }
+
+    private bool CanPauseMission() => SimulationRunning;
 
     [RelayCommand]
     public void LoadScenario(string scenarioPath)
@@ -234,9 +261,11 @@ public partial class MainViewModel : ObservableObject
             WeatherSummary = BuildWeatherSummary(Sim.LatestSnapshot);
             RadarCursorReadout = "CURSOR BRAA: ---";
             SimulationRunning = false;
+            RefreshAssessment(Sim.LatestSnapshot);
             RefreshDerivedBindings();
             RefreshCommandStates();
             SetStatus($"SCENARIO LOADED: {scenario.Name}");
+            LogOps("BRIEF", scenario.Description.Length > 0 ? scenario.Description : $"Scenario {scenario.Name} loaded.");
         }
         catch (Exception ex)
         {
@@ -343,7 +372,7 @@ public partial class MainViewModel : ObservableObject
         InputMessage = "";
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanSendQuickCommand))]
     public async Task SendQuickCommand(string commandKey)
     {
         var route = BuildQuickCommand(commandKey);
@@ -355,6 +384,17 @@ public partial class MainViewModel : ObservableObject
 
         await SendPlayerRadioAsync(route.Channel, route.Message);
     }
+
+    private bool CanSendQuickCommand(string? commandKey) => commandKey switch
+    {
+        "ack" => true,
+        "picture" => SimulationRunning,
+        "status" => CurrentSnapshot != null,
+        "declare" => SimulationRunning && SelectedTrack != null,
+        "weapons_free" => SimulationRunning && HostileCount > 0,
+        "intel" => HostileCount > 0,
+        _ => false
+    };
 
     [RelayCommand]
     public void SelectChannel(RadioChannel channel)
@@ -435,6 +475,7 @@ public partial class MainViewModel : ObservableObject
             SelectedTrack = snapshot.AllTracks.FirstOrDefault(t => t.TrackId == SelectedTrackId);
 
         RefreshSelectedTrackReadout();
+        RefreshAssessment(snapshot);
         RefreshCommandStates();
         RefreshDerivedBindings();
     }
@@ -476,6 +517,7 @@ public partial class MainViewModel : ObservableObject
         {
             Audio.Play(SoundEvent.NewContact);
             SetStatus($"NEW CONTACT: {evt.TrackId} [{evt.Classification}]");
+            LogOps("CONTACT", $"{evt.TrackId} classified {evt.Classification}.");
         });
     }
 
@@ -488,18 +530,24 @@ public partial class MainViewModel : ObservableObject
                 Audio.Play(SoundEvent.MissileImpact);
                 SetStatus($"SPLASH — {evt.TrackId} DESTROYED");
                 Crew.ApplyMoraleBoost(0.05, "Kill confirmed");
+                LogOps("ENGAGEMENT", $"{evt.TrackId} destroyed.");
             }
             else
             {
                 Audio.Play(SoundEvent.MissileMiss);
                 SetStatus($"MISS — {evt.TrackId}");
+                LogOps("ENGAGEMENT", $"{evt.TrackId} survived missile engagement.");
             }
         });
     }
 
     private void OnMissileLaunched(MissileLaunchedEvent evt)
     {
-        DispatchToUI(() => SetStatus($"MISSILE AWAY → {evt.TargetTrackId} [{evt.LauncherId}]"));
+        DispatchToUI(() =>
+        {
+            SetStatus($"MISSILE AWAY → {evt.TargetTrackId} [{evt.LauncherId}]");
+            LogOps("LAUNCH", $"{evt.LauncherId} engaged {evt.TargetTrackId}.");
+        });
     }
 
     private void OnAlertChanged(AlertLevelChangedEvent evt)
@@ -509,6 +557,7 @@ public partial class MainViewModel : ObservableObject
             if (evt.NewLevel is "Red" or "Black")
                 Audio.Play(SoundEvent.AlertKlaxon);
             SetStatus($"ALERT LEVEL: {evt.NewLevel.ToUpper()}");
+            LogOps("ALERT", $"Alert level changed to {evt.NewLevel.ToUpper()}.");
         });
     }
 
@@ -518,6 +567,7 @@ public partial class MainViewModel : ObservableObject
         {
             Audio.Play(SoundEvent.FlashMessageAlert);
             SetStatus($"ROE CHANGE: {evt.NewROE.Replace("Weapons", "WEAPONS ")}");
+            LogOps("ROE", $"ROE updated to {evt.NewROE.Replace("Weapons", "WEAPONS ")} by {evt.AuthorizedBy}.");
         });
     }
 
@@ -530,6 +580,7 @@ public partial class MainViewModel : ObservableObject
             Sim.Pause();
             SimulationRunning = false;
             RefreshCommandStates();
+            LogOps("MISSION", $"{outcome}: {evt.Reason}");
         });
     }
 
@@ -540,6 +591,7 @@ public partial class MainViewModel : ObservableObject
             Audio.Play(SoundEvent.AlertKlaxon);
             SetStatus($"BATTERY HIT: {evt.ComponentDamaged}");
             Crew.ApplyFearEvent(0.3, "battery hit");
+            LogOps("DAMAGE", $"Battery component hit: {evt.ComponentDamaged}.");
         });
     }
 
@@ -626,6 +678,9 @@ public partial class MainViewModel : ObservableObject
 
         if (AI != null)
             await AI.HandlePlayerMessageAsync(channel, msg.Content, Sim.LatestSnapshot);
+
+        if (channel == RadioChannel.BatteryNet)
+            await HandleBatteryNetMessageAsync(content);
     }
 
     private (RadioChannel Channel, string Message) BuildQuickCommand(string commandKey) => commandKey switch
@@ -656,9 +711,12 @@ public partial class MainViewModel : ObservableObject
 
     private void RefreshCommandStates()
     {
+        StartMissionCommand.NotifyCanExecuteChanged();
+        PauseMissionCommand.NotifyCanExecuteChanged();
         DesignateSelectedCommand.NotifyCanExecuteChanged();
         FireSingleCommand.NotifyCanExecuteChanged();
         FireSalvoCommand.NotifyCanExecuteChanged();
+        SendQuickCommandCommand.NotifyCanExecuteChanged();
     }
 
     private void RefreshUnreadCounts()
@@ -681,6 +739,7 @@ public partial class MainViewModel : ObservableObject
     private void RefreshDerivedBindings()
     {
         OnPropertyChanged(nameof(ThreatSummaryText));
+        OnPropertyChanged(nameof(BatterySummaryText));
         RefreshAiBindings();
     }
 
@@ -696,8 +755,64 @@ public partial class MainViewModel : ObservableObject
         Sim.Comms.MarkAllRead(RadioChannel.IntelNet);
         SelectedTrackId = null;
         SelectedTrack = null;
+        MissionPhaseText = "MISSION PHASE: STANDBY";
+        ObjectiveStatusText = "OBJECTIVE: AWAITING BRIEFING";
+        NextWaveText = "NEXT WAVE: NONE";
+        RecommendationText = "RECOMMENDATION: MAINTAIN SEARCH PATTERN";
+        SectorPressureText = "SECTOR PRESSURE: LOW";
+        SingleShotPkText = "PK: STANDBY";
+        SalvoPkText = "SALVO PK: STANDBY";
+        OpsFeed.Clear();
         RefreshSelectedTrackReadout();
         RefreshUnreadCounts();
+    }
+
+    private void RefreshAssessment(SimulationSnapshot snapshot)
+    {
+        var assessment = MissionAdvisor.Build(
+            snapshot,
+            Scenario.CurrentScenario,
+            Scenario.EnemyBreakthroughs,
+            SelectedTrack,
+            Sim.Weapons);
+
+        MissionPhaseText = assessment.MissionPhase;
+        ObjectiveStatusText = assessment.ObjectiveStatus;
+        NextWaveText = assessment.NextWaveStatus;
+        RecommendationText = assessment.Recommendation;
+        SectorPressureText = assessment.SectorPressure;
+        SingleShotPkText = assessment.SingleShotPkText;
+        SalvoPkText = assessment.SalvoPkText;
+    }
+
+    private async Task HandleBatteryNetMessageAsync(string content)
+    {
+        var responder = CrewRadioDirector.SelectResponder(Crew, content);
+        string line = "";
+
+        if (AI?.AIAvailable == true)
+        {
+            line = await AI.CrewAgent.GenerateCrewLine(
+                responder.FullName,
+                CrewRadioDirector.GetPersonalitySummary(responder),
+                $"Player battery-net message: {content}. {MissionPhaseText}. {RecommendationText}.",
+                Sim.LatestSnapshot);
+        }
+
+        if (string.IsNullOrWhiteSpace(line))
+            line = CrewRadioDirector.BuildFallbackLine(responder, content, Sim.LatestSnapshot);
+
+        Sim.Comms.Queue(CommManager.CreateCrewMessage(responder.FullName, line));
+    }
+
+    private void LogOps(string category, string message)
+    {
+        DispatchToUI(() =>
+        {
+            OpsFeed.Insert(0, new OpsFeedItem(category, message));
+            while (OpsFeed.Count > 25)
+                OpsFeed.RemoveAt(OpsFeed.Count - 1);
+        });
     }
 
     private static string BuildTrackBraa(TrackFile track) =>
@@ -963,4 +1078,19 @@ public partial class SoldierViewModel : ObservableObject
         MoraleColor = _soldier.Morale > 0.7 ? "#00DC00" :
                       _soldier.Morale > 0.4 ? "#FFC800" : "#FF3232";
     }
+}
+
+public sealed class OpsFeedItem
+{
+    public OpsFeedItem(string category, string message)
+    {
+        Category = category;
+        Message = message;
+        Timestamp = DateTime.UtcNow;
+    }
+
+    public string Category { get; }
+    public string Message { get; }
+    public DateTime Timestamp { get; }
+    public string TimeText => Timestamp.ToString("HH:mm:ss");
 }
