@@ -1,6 +1,8 @@
 using System.Net.Http.Json;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 
 namespace DEADSKY.AI.Client;
 
@@ -12,11 +14,15 @@ public class AIModelClient
 {
     // ── GLOBAL MODEL CONFIGURATION ─────────────────────────────────────
     // Change this one variable to switch models for the entire game.
-    public static string ModelIdentifier { get; set; } = "nemotron-mini-4b-instruct";
-    public static string ApiEndpoint { get; set; } = "http://localhost:1234/v1/chat/completions";
-    public static double DefaultTemperature { get; set; } = 0.7;
+    public static string ModelIdentifier { get; set; } =
+        Environment.GetEnvironmentVariable("DEADSKY_AI_MODEL") ?? "nvidia/nemotron-3-nano-4b";
+    public static string ApiEndpoint { get; set; } =
+        Environment.GetEnvironmentVariable("DEADSKY_AI_ENDPOINT") ?? "http://localhost:1234/v1/chat/completions";
+    public static double DefaultTemperature { get; set; } = 0.25;
     public static int DefaultMaxTokens { get; set; } = 512;
-    public static bool ReasoningEnabled { get; set; } = false; // Nemotron reasoning toggle
+    public static bool ReasoningEnabled { get; set; } =
+        bool.TryParse(Environment.GetEnvironmentVariable("DEADSKY_AI_REASONING"), out var enabled) && enabled;
+    public static string ModelsEndpoint => ApiEndpoint.Replace("/chat/completions", "/models", StringComparison.OrdinalIgnoreCase);
     // ──────────────────────────────────────────────────────────────────
 
     private readonly HttpClient _http;
@@ -55,11 +61,7 @@ public class AIModelClient
         {
             new { role = "system", content = systemPrompt }
         };
-        requestMessages.AddRange(messages.Select(m => (object)new
-        {
-            role = m.Role.ToLower(),
-            content = m.Content
-        }));
+        requestMessages.AddRange(messages.Select(BuildChatMessagePayload));
 
         var requestBody = new Dictionary<string, object>
         {
@@ -127,6 +129,106 @@ public class AIModelClient
         return resp.IsError ? "" : resp.TextContent;
     }
 
+    /// <summary>
+    /// Structured JSON output via LM Studio's OpenAI-compatible response_format support.
+    /// Best used for small deterministic payloads, not large free-form reasoning.
+    /// </summary>
+    public async Task<JsonNode?> GetStructuredJsonAsync(
+        string systemPrompt,
+        string userMessage,
+        string schemaName,
+        JsonObject schema,
+        bool strict = true,
+        double temperature = 0.1,
+        int maxTokens = 256,
+        CancellationToken ct = default)
+    {
+        TotalRequestsMade++;
+
+        var requestBody = new Dictionary<string, object>
+        {
+            ["model"] = ModelIdentifier,
+            ["messages"] = new object[]
+            {
+                new { role = "system", content = systemPrompt },
+                new { role = "user", content = userMessage }
+            },
+            ["response_format"] = new
+            {
+                type = "json_schema",
+                json_schema = new
+                {
+                    name = schemaName,
+                    strict = strict,
+                    schema
+                }
+            },
+            ["temperature"] = temperature,
+            ["max_tokens"] = maxTokens,
+            ["stream"] = false
+        };
+
+        try
+        {
+            var response = await _http.PostAsJsonAsync(ApiEndpoint, requestBody, _jsonOpts, ct);
+            response.EnsureSuccessStatusCode();
+
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            var message = doc.RootElement
+                .GetProperty("choices")[0]
+                .GetProperty("message");
+            string content = ExtractMessageText(message);
+
+            return string.IsNullOrWhiteSpace(content) ? null : JsonNode.Parse(content);
+        }
+        catch (Exception ex)
+        {
+            TotalErrors++;
+            Console.Error.WriteLine($"[AI] structured-output error: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static object BuildChatMessagePayload(ChatMessage message)
+    {
+        if (message.Role.Equals("tool", StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                role = "tool",
+                content = message.Content,
+                tool_call_id = message.ToolCallId,
+                name = message.Name
+            };
+        }
+
+        if (message.Role.Equals("assistant", StringComparison.OrdinalIgnoreCase) &&
+            message.ToolCalls is { Count: > 0 })
+        {
+            return new
+            {
+                role = "assistant",
+                content = string.IsNullOrWhiteSpace(message.Content) ? null : message.Content,
+                tool_calls = message.ToolCalls.Select(tc => new
+                {
+                    id = tc.Id,
+                    type = "function",
+                    function = new
+                    {
+                        name = tc.Name,
+                        arguments = tc.ArgumentsJson
+                    }
+                }).ToList()
+            };
+        }
+
+        return new
+        {
+            role = message.Role.ToLowerInvariant(),
+            content = message.Content
+        };
+    }
+
     private AIResponse ParseResponse(string raw)
     {
         using var doc = JsonDocument.Parse(raw);
@@ -137,7 +239,19 @@ public class AIModelClient
         var response = new AIResponse();
 
         if (choice.TryGetProperty("content", out var content) && content.ValueKind != JsonValueKind.Null)
-            response.TextContent = content.GetString() ?? "";
+            response.TextContent = ExtractText(content);
+
+        if (choice.TryGetProperty("reasoning_content", out var reasoning) &&
+            reasoning.ValueKind != JsonValueKind.Null)
+        {
+            response.ReasoningContent = ExtractText(reasoning);
+        }
+
+        if (string.IsNullOrWhiteSpace(response.TextContent) &&
+            !string.IsNullOrWhiteSpace(response.ReasoningContent))
+        {
+            response.TextContent = response.ReasoningContent.Trim();
+        }
 
         if (choice.TryGetProperty("tool_calls", out var toolCalls) &&
             toolCalls.ValueKind == JsonValueKind.Array)
@@ -176,12 +290,53 @@ public class AIModelClient
     {
         try
         {
-            var resp = await _http.GetAsync(ApiEndpoint.Replace("/v1/chat/completions", "/v1/models"),
+            var resp = await _http.GetAsync(ModelsEndpoint,
                 new CancellationTokenSource(3000).Token);
             IsAvailable = resp.IsSuccessStatusCode;
             return IsAvailable;
         }
         catch { IsAvailable = false; return false; }
+    }
+
+    private static string ExtractMessageText(JsonElement message)
+    {
+        if (message.TryGetProperty("content", out var content))
+        {
+            var text = ExtractText(content);
+            if (!string.IsNullOrWhiteSpace(text))
+                return text;
+        }
+
+        if (message.TryGetProperty("reasoning_content", out var reasoning))
+            return ExtractText(reasoning);
+
+        return string.Empty;
+    }
+
+    private static string ExtractText(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? string.Empty,
+            JsonValueKind.Array => string.Concat(value.EnumerateArray().Select(ExtractTextPart)),
+            JsonValueKind.Object => value.ToString(),
+            _ => string.Empty
+        };
+    }
+
+    private static string ExtractTextPart(JsonElement part)
+    {
+        if (part.ValueKind == JsonValueKind.String)
+            return part.GetString() ?? string.Empty;
+
+        if (part.ValueKind == JsonValueKind.Object &&
+            part.TryGetProperty("text", out var textNode) &&
+            textNode.ValueKind == JsonValueKind.String)
+        {
+            return textNode.GetString() ?? string.Empty;
+        }
+
+        return string.Empty;
     }
 }
 
@@ -193,9 +348,16 @@ public class ChatMessage
     public string Content { get; set; } = "";
     public string? ToolCallId { get; set; }       // For tool result messages
     public string? Name { get; set; }             // For tool result messages
+    public List<ToolCall>? ToolCalls { get; set; }
 
     public static ChatMessage User(string content) => new() { Role = "user", Content = content };
     public static ChatMessage Assistant(string content) => new() { Role = "assistant", Content = content };
+    public static ChatMessage AssistantToolCalls(IEnumerable<ToolCall> toolCalls, string? content = null) => new()
+    {
+        Role = "assistant",
+        Content = content ?? "",
+        ToolCalls = toolCalls.ToList()
+    };
     public static ChatMessage ToolResult(string toolCallId, string result) => new()
     {
         Role = "tool",
@@ -207,6 +369,7 @@ public class ChatMessage
 public class AIResponse
 {
     public string TextContent { get; set; } = "";
+    public string ReasoningContent { get; set; } = "";
     public List<ToolCall> ToolCalls { get; set; } = new();
     public bool HasToolCalls => ToolCalls.Count > 0;
     public bool IsError { get; set; }
@@ -228,13 +391,35 @@ public class ToolCall
 
     public double GetDouble(string key, double defaultVal = 0) =>
         Arguments.TryGetValue(key, out var v) &&
-        (v.ValueKind == System.Text.Json.JsonValueKind.Number)
-            ? v.GetDouble() : defaultVal;
+        (v.ValueKind == System.Text.Json.JsonValueKind.Number ||
+         v.ValueKind == System.Text.Json.JsonValueKind.String)
+            ? TryGetDouble(v, defaultVal) : defaultVal;
 
     public int GetInt(string key, int defaultVal = 0) =>
         Arguments.TryGetValue(key, out var v) &&
-        v.ValueKind == System.Text.Json.JsonValueKind.Number
-            ? v.GetInt32() : defaultVal;
+        (v.ValueKind == System.Text.Json.JsonValueKind.Number ||
+         v.ValueKind == System.Text.Json.JsonValueKind.String)
+            ? TryGetInt(v, defaultVal) : defaultVal;
+
+    private static double TryGetDouble(JsonElement value, double defaultVal)
+    {
+        if (value.ValueKind == JsonValueKind.Number)
+            return value.GetDouble();
+
+        return double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : defaultVal;
+    }
+
+    private static int TryGetInt(JsonElement value, int defaultVal)
+    {
+        if (value.ValueKind == JsonValueKind.Number)
+            return value.GetInt32();
+
+        return int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : defaultVal;
+    }
 }
 
 public class ToolDefinition

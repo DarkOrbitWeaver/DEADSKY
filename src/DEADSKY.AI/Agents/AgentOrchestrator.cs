@@ -1,5 +1,6 @@
 using DEADSKY.AI.Client;
 using DEADSKY.AI.Tools;
+using DEADSKY.Core.Comms;
 using DEADSKY.Core.EnemyAI;
 using DEADSKY.Core.Simulation;
 
@@ -19,6 +20,7 @@ public abstract class AgentBase
     public string AgentName { get; init; } = "";
     public DateTime LastRunTime { get; protected set; } = DateTime.MinValue;
     public bool IsRunning { get; protected set; }
+    protected bool LastRunUsedTools { get; private set; }
 
     protected AgentBase(AIModelClient client, ToolRegistry tools)
     {
@@ -53,6 +55,7 @@ public abstract class AgentBase
 
             int iterations = 0;
             string finalText = "";
+            bool usedTools = false;
 
             while (iterations < 5)
             {
@@ -71,7 +74,8 @@ public abstract class AgentBase
                 }
 
                 // Execute tool calls
-                _history.Add(ChatMessage.Assistant(response.TextContent));
+                usedTools = true;
+                _history.Add(ChatMessage.AssistantToolCalls(response.ToolCalls, response.TextContent));
                 foreach (var toolCall in response.ToolCalls)
                 {
                     var result = await _tools.ExecuteAsync(toolCall);
@@ -79,6 +83,7 @@ public abstract class AgentBase
                 }
             }
 
+            LastRunUsedTools = usedTools;
             return finalText;
         }
         finally { IsRunning = false; }
@@ -189,7 +194,7 @@ public class AlliedHQAgent : AgentBase
         if (_periodicTimer >= 180.0 && !IsRunning)
         {
             _periodicTimer = 0;
-            _ = RunAsync(snapshot, BuildPeriodicContext(snapshot));
+            _ = SendPeriodicSitrepAsync(snapshot);
         }
     }
 
@@ -197,7 +202,15 @@ public class AlliedHQAgent : AgentBase
     public async Task RespondToPlayerMessage(string playerMessage, SimulationSnapshot snapshot)
     {
         if (IsRunning) return;
-        await RunAsync(snapshot, $"Player message on COMMAND NET: \"{playerMessage}\"\n\nRespond in character as ECHO ACTUAL.");
+        var response = await RunAsync(snapshot,
+            $"Player message on COMMAND NET: \"{playerMessage}\"\n\nRespond in character as ECHO ACTUAL.");
+
+        if (!LastRunUsedTools && !string.IsNullOrWhiteSpace(response))
+        {
+            _tools.Simulation.Comms.Queue(CommManager.CreateAlliedHQMessage(
+                response.Trim(),
+                MessagePriority.Priority));
+        }
     }
 
     protected override string BuildSystemPrompt(SimulationSnapshot snapshot)
@@ -234,6 +247,17 @@ Use tools to send messages as ECHO ACTUAL, update ROE, set alert levels, log eve
         $"Send a brief SITREP to ALPHA ACTUAL. Time: {snapshot.GameTimeString}. " +
         $"Hostile contacts: {snapshot.HostileTracks.Count}. " +
         $"Situation assessment and any orders.";
+
+    private async Task SendPeriodicSitrepAsync(SimulationSnapshot snapshot)
+    {
+        var response = await RunAsync(snapshot, BuildPeriodicContext(snapshot));
+        if (!LastRunUsedTools && !string.IsNullOrWhiteSpace(response))
+        {
+            _tools.Simulation.Comms.Queue(CommManager.CreateAlliedHQMessage(
+                response.Trim(),
+                MessagePriority.Routine));
+        }
+    }
 }
 
 // ── Intel Agent ────────────────────────────────────────────────────────────
@@ -258,14 +282,25 @@ public class IntelligenceAgent : AgentBase
         if (_timer >= 240.0 && !IsRunning) // Every 4 minutes
         {
             _timer = 0;
-            _ = RunAsync(snapshot, "Provide a current intelligence update based on radar contacts and engagement history.");
+            _ = SendPeriodicIntelUpdateAsync(snapshot);
         }
     }
 
     public async Task OnNewContactDetected(string trackId, SimulationSnapshot snapshot)
     {
         if (IsRunning) return;
-        await RunAsync(snapshot, $"New contact detected: {trackId}. Provide brief intel assessment.");
+        var response = await RunAsync(snapshot, $"New contact detected: {trackId}. Provide brief intel assessment.");
+        if (!LastRunUsedTools && !string.IsNullOrWhiteSpace(response))
+            _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response.Trim()));
+    }
+
+    public async Task RespondToPlayerQuery(string playerMessage, SimulationSnapshot snapshot)
+    {
+        if (IsRunning) return;
+        var response = await RunAsync(snapshot,
+            $"Player message on INTEL NET: \"{playerMessage}\"\n\nAnswer as INTEL-1 with a concise assessment or warning.");
+        if (!LastRunUsedTools && !string.IsNullOrWhiteSpace(response))
+            _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response.Trim()));
     }
 
     protected override string BuildSystemPrompt(SimulationSnapshot snapshot) =>
@@ -277,6 +312,14 @@ Keep messages brief and actionable.
 
 Use send_radio_message on the intel channel to deliver your reports to ALPHA.
 Use get_radar_contacts and get_threat_assessment first to inform your analysis.";
+
+    private async Task SendPeriodicIntelUpdateAsync(SimulationSnapshot snapshot)
+    {
+        var response = await RunAsync(snapshot,
+            "Provide a current intelligence update based on radar contacts and engagement history.");
+        if (!LastRunUsedTools && !string.IsNullOrWhiteSpace(response))
+            _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response.Trim()));
+    }
 }
 
 // ── Crew Personality Agent ─────────────────────────────────────────────────
@@ -321,8 +364,6 @@ public class AgentOrchestrator
     public CrewPersonalityAgent CrewAgent { get; }
 
     private readonly AIModelClient _client;
-    private int _concurrentRequests;
-    private const int MaxConcurrent = 2;
     private bool _aiAvailable = true;
 
     public bool AIAvailable => _aiAvailable;
@@ -348,10 +389,19 @@ public class AgentOrchestrator
         Intel.Tick(deltaTime, snapshot);
     }
 
-    public async Task HandlePlayerMessageAsync(string message, SimulationSnapshot snapshot)
+    public async Task HandlePlayerMessageAsync(RadioChannel channel, string message, SimulationSnapshot snapshot)
     {
         if (!_aiAvailable) return;
-        await AlliedHQ.RespondToPlayerMessage(message, snapshot);
+
+        switch (channel)
+        {
+            case RadioChannel.CommandNet:
+                await AlliedHQ.RespondToPlayerMessage(message, snapshot);
+                break;
+            case RadioChannel.IntelNet:
+                await Intel.RespondToPlayerQuery(message, snapshot);
+                break;
+        }
     }
 
     public async Task HandleNewContactAsync(string trackId, SimulationSnapshot snapshot)

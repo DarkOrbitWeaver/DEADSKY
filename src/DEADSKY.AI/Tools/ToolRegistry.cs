@@ -20,6 +20,7 @@ public class ToolRegistry
     private readonly Dictionary<string, Func<ToolCall, Task<string>>> _handlers;
     private readonly Dictionary<string, ToolDefinition> _definitions;
 
+    public SimulationEngine Simulation => _sim;
     public IReadOnlyList<ToolDefinition> AllTools =>
         _definitions.Values.ToList();
 

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DEADSKY.AI.Agents;
@@ -51,6 +52,14 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _aiAvailable;
     [ObservableProperty] private RadioChannel _activeChannel = RadioChannel.CommandNet;
     [ObservableProperty] private string _inputMessage = "";
+    [ObservableProperty] private string _selectedTrackBraa = "BRAA ---";
+    [ObservableProperty] private string _selectedTrackThreatText = "NO TARGET SELECTED";
+    [ObservableProperty] private string _selectedTrackEnvelopeText = "ENGAGEMENT WINDOW: STANDBY";
+    [ObservableProperty] private string _radarCursorReadout = "CURSOR BRAA: ---";
+    [ObservableProperty] private string _weatherSummary = "WX CLR | VIS 80NM | CEIL 25000FT";
+    [ObservableProperty] private int _commandUnreadCount;
+    [ObservableProperty] private int _batteryUnreadCount;
+    [ObservableProperty] private int _intelUnreadCount;
 
     // Battery state
     [ObservableProperty] private int _readyLaunchers = 4;
@@ -63,6 +72,7 @@ public partial class MainViewModel : ObservableObject
 
     // Alert level color (bound to header)
     [ObservableProperty] private string _alertColor = "#FFC800";
+    [ObservableProperty] private string _aiStatusColor = "#FFC800";
 
     // ── Message collections ────────────────────────────────────────────
     public ObservableCollection<RadioMessage> CommandNetMessages { get; } = new();
@@ -78,6 +88,15 @@ public partial class MainViewModel : ObservableObject
 
     // ── Crew display ──────────────────────────────────────────────────
     public ObservableCollection<SoldierViewModel> CrewDisplay { get; } = new();
+    public string AiModelText => AIModelClient.ModelIdentifier;
+    public string AiEndpointText => AIModelClient.ModelsEndpoint;
+    public string AiStatusText => AiAvailable ? "ONLINE" : "OFFLINE";
+    public string CommandChannelLabel => CommandUnreadCount > 0 ? $"CMD {CommandUnreadCount}" : "CMD";
+    public string BatteryChannelLabel => BatteryUnreadCount > 0 ? $"BAT {BatteryUnreadCount}" : "BAT";
+    public string IntelChannelLabel => IntelUnreadCount > 0 ? $"INT {IntelUnreadCount}" : "INT";
+    public string ThreatSummaryText => HostileCount == 0
+        ? "AIR PICTURE CLEAN"
+        : $"{HostileCount} HOSTILE / {TrackCount} TRACKS";
 
     // ── Constructor ───────────────────────────────────────────────────
 
@@ -134,7 +153,11 @@ public partial class MainViewModel : ObservableObject
 
         bool available = await AI.CheckAvailabilityAsync();
         AiAvailable = available;
-        SetStatus(available ? "AI ONLINE — Nemotron connected" : "AI OFFLINE — running without AI");
+        AiStatusColor = available ? "#00DC00" : "#FFC800";
+        RefreshAiBindings();
+        SetStatus(available
+            ? $"AI ONLINE — {AIModelClient.ModelIdentifier}"
+            : "AI OFFLINE — running without AI");
 
         // Hook AI into sim tick
         Sim.OnTickForAI = snapshot => AI.Tick(0.05, snapshot);
@@ -156,6 +179,20 @@ public partial class MainViewModel : ObservableObject
     // ── Simulation control commands ───────────────────────────────────
 
     [RelayCommand]
+    public async Task RefreshAiStatus()
+    {
+        if (AI == null)
+            return;
+
+        AiAvailable = await AI.CheckAvailabilityAsync();
+        AiStatusColor = AiAvailable ? "#00DC00" : "#FFC800";
+        RefreshAiBindings();
+        SetStatus(AiAvailable
+            ? $"AI LINK CONFIRMED — {AIModelClient.ModelIdentifier}"
+            : "AI LINK LOST — CHECK LM STUDIO SERVER");
+    }
+
+    [RelayCommand]
     public void StartMission()
     {
         if (SimulationRunning) return;
@@ -163,6 +200,7 @@ public partial class MainViewModel : ObservableObject
         SimulationRunning = true;
         SetStatus("MISSION ACTIVE");
         Audio.Play(SoundEvent.SystemOnline);
+        RefreshCommandStates();
     }
 
     [RelayCommand]
@@ -172,6 +210,7 @@ public partial class MainViewModel : ObservableObject
         Sim.Pause();
         SimulationRunning = false;
         SetStatus("MISSION PAUSED");
+        RefreshCommandStates();
     }
 
     [RelayCommand]
@@ -180,17 +219,23 @@ public partial class MainViewModel : ObservableObject
         try
         {
             var loader = new ScenarioLoader();
-            ScenarioDefinition scenario;
-            if (File.Exists(scenarioPath))
-                scenario = loader.Load(scenarioPath);
-            else
+            var scenarioKey = scenarioPath?.Trim().ToLowerInvariant();
+            ScenarioDefinition scenario = scenarioKey switch
             {
-                // Load default tutorial scenario
-                scenario = CreateTutorialScenario();
-            }
+                null or "" or "tutorial" => CreateTutorialScenario(),
+                "operation" or "deadsky" or "strike" => CreateOperationDeadskyScenario(),
+                _ when File.Exists(scenarioPath) => loader.Load(scenarioPath),
+                _ => CreateTutorialScenario()
+            };
 
+            ResetUiForScenarioLoad();
             Scenario.LoadScenario(scenario);
             MissionName = scenario.Name;
+            WeatherSummary = BuildWeatherSummary(Sim.LatestSnapshot);
+            RadarCursorReadout = "CURSOR BRAA: ---";
+            SimulationRunning = false;
+            RefreshDerivedBindings();
+            RefreshCommandStates();
             SetStatus($"SCENARIO LOADED: {scenario.Name}");
         }
         catch (Exception ex)
@@ -250,16 +295,43 @@ public partial class MainViewModel : ObservableObject
     // ── Radar commands ────────────────────────────────────────────────
 
     [RelayCommand]
-    public void SetRadarSearch() => Sim.PlayerSetRadarMode(RadarMode.Search);
+    public void SetRadarSearch()
+    {
+        Sim.PlayerSetRadarMode(RadarMode.Search);
+        SetStatus("RADAR MODE SEARCH");
+        RefreshDerivedBindings();
+    }
 
     [RelayCommand]
-    public void SetRadarTWS() => Sim.PlayerSetRadarMode(RadarMode.TrackWhileScan);
+    public void SetRadarTWS()
+    {
+        Sim.PlayerSetRadarMode(RadarMode.TrackWhileScan);
+        SetStatus("RADAR MODE TWS");
+        RefreshDerivedBindings();
+    }
 
     [RelayCommand]
-    public void SetRadarSilent() => Sim.PlayerSetRadarMode(RadarMode.Silent);
+    public void SetRadarSilent()
+    {
+        Sim.PlayerSetRadarMode(RadarMode.Silent);
+        SetStatus("RADAR MODE SILENT");
+        RefreshDerivedBindings();
+    }
 
     [RelayCommand]
-    public void SetRadarRange(double rangeNm) => Sim.PlayerSetRadarRange(rangeNm);
+    public void SetRadarRange(double rangeNm)
+    {
+        Sim.PlayerSetRadarRange(rangeNm);
+        SetStatus($"RADAR RANGE SET {rangeNm:F0} NM");
+        RefreshDerivedBindings();
+    }
+
+    [RelayCommand]
+    public void SetRadarRangePreset(string rangeNmText)
+    {
+        if (double.TryParse(rangeNmText, out var rangeNm))
+            SetRadarRange(rangeNm);
+    }
 
     // ── Comms commands ────────────────────────────────────────────────
 
@@ -267,19 +339,29 @@ public partial class MainViewModel : ObservableObject
     public async Task SendMessage()
     {
         if (string.IsNullOrWhiteSpace(InputMessage)) return;
-        var msg = Sim.PlayerSendMessage(ActiveChannel, InputMessage);
+        await SendPlayerRadioAsync(ActiveChannel, InputMessage.Trim());
         InputMessage = "";
-        Audio.Play(SoundEvent.RadioSquelchOpen);
+    }
 
-        // Route to AI for response
-        if (AI != null && ActiveChannel == RadioChannel.CommandNet)
-            await AI.HandlePlayerMessageAsync(msg.Content, Sim.LatestSnapshot);
+    [RelayCommand]
+    public async Task SendQuickCommand(string commandKey)
+    {
+        var route = BuildQuickCommand(commandKey);
+        if (route.Message.Length == 0)
+        {
+            SetStatus("QUICK COMMAND UNAVAILABLE FOR CURRENT CONTEXT");
+            return;
+        }
+
+        await SendPlayerRadioAsync(route.Channel, route.Message);
     }
 
     [RelayCommand]
     public void SelectChannel(RadioChannel channel)
     {
         ActiveChannel = channel;
+        Sim.Comms.MarkAllRead(channel);
+        RefreshUnreadCounts();
         Audio.Play(SoundEvent.ChannelSwitch);
     }
 
@@ -289,9 +371,14 @@ public partial class MainViewModel : ObservableObject
     {
         SelectedTrackId = trackId;
         SelectedTrack = Sim.Radar.TrackManager.GetById(trackId);
-        DesignateSelectedCommand.NotifyCanExecuteChanged();
-        FireSingleCommand.NotifyCanExecuteChanged();
-        FireSalvoCommand.NotifyCanExecuteChanged();
+        RefreshSelectedTrackReadout();
+        RefreshCommandStates();
+    }
+
+    public void SelectRadarPoint(double bearingDeg, double rangeNm)
+    {
+        RadarCursorReadout = $"CURSOR BRAA {bearingDeg:000}/{rangeNm:0.0}";
+        SetStatus($"CURSOR BRAA {bearingDeg:000}/{rangeNm:0.0}");
     }
 
     // ── Simulation event handlers (called on sim thread) ─────────────
@@ -311,6 +398,7 @@ public partial class MainViewModel : ObservableObject
     {
         CurrentSnapshot = snapshot;
         GameTime = snapshot.GameTimeString;
+        WeatherSummary = BuildWeatherSummary(snapshot);
 
         var battery = snapshot.Battery;
         if (battery != null)
@@ -345,6 +433,10 @@ public partial class MainViewModel : ObservableObject
         // Update selected track
         if (SelectedTrackId != null)
             SelectedTrack = snapshot.AllTracks.FirstOrDefault(t => t.TrackId == SelectedTrackId);
+
+        RefreshSelectedTrackReadout();
+        RefreshCommandStates();
+        RefreshDerivedBindings();
     }
 
     private void UpdateThreatBoard(SimulationSnapshot snapshot)
@@ -365,6 +457,17 @@ public partial class MainViewModel : ObservableObject
         }
         while (ThreatBoardTracks.Count > hostile.Count)
             ThreatBoardTracks.RemoveAt(ThreatBoardTracks.Count - 1);
+
+        if (hostile.Count == 0)
+        {
+            SelectedTrackId = null;
+            SelectedTrack = null;
+            RefreshSelectedTrackReadout();
+            return;
+        }
+
+        if (SelectedTrackId == null || hostile.All(t => t.TrackId != SelectedTrackId))
+            SelectTrack(hostile[0].TrackId);
     }
 
     private void OnNewContact(NewContactEvent evt)
@@ -425,6 +528,8 @@ public partial class MainViewModel : ObservableObject
             string outcome = evt.Victory ? "VICTORY" : "DEFEAT";
             SetStatus($"MISSION {outcome}: {evt.Reason}");
             Sim.Pause();
+            SimulationRunning = false;
+            RefreshCommandStates();
         });
     }
 
@@ -450,9 +555,11 @@ public partial class MainViewModel : ObservableObject
                 _ => null
             };
             target?.Add(msg);
+            msg.IsRead = msg.Channel == ActiveChannel;
             AllMessagesRecent.Add(msg);
             if (AllMessagesRecent.Count > 100)
                 AllMessagesRecent.RemoveAt(0);
+            RefreshUnreadCounts();
 
             if (msg.Priority == MessagePriority.Flash)
                 Audio.Play(SoundEvent.FlashMessageAlert);
@@ -485,6 +592,7 @@ public partial class MainViewModel : ObservableObject
                             outcome == ScenarioManager.MissionOutcome.PartialVictory ? "PARTIAL VICTORY" : "DEFEAT";
         SetStatus($"{outcomeStr}: {reason}");
         SimulationRunning = false;
+        RefreshCommandStates();
 
         // Award budget
         var battery = Sim.Entities.GetPlayerBattery();
@@ -505,6 +613,118 @@ public partial class MainViewModel : ObservableObject
     // ── Utilities ─────────────────────────────────────────────────────
 
     private void SetStatus(string msg) => StatusMessage = msg;
+
+    private async Task SendPlayerRadioAsync(RadioChannel channel, string content)
+    {
+        ActiveChannel = channel;
+        var msg = Sim.PlayerSendMessage(channel, content);
+        msg.IsRead = true;
+        Sim.Comms.MarkAllRead(channel);
+        RefreshUnreadCounts();
+        Audio.Play(SoundEvent.RadioSquelchOpen);
+        SetStatus($"{channel.ToString().ToUpper()}: {content}");
+
+        if (AI != null)
+            await AI.HandlePlayerMessageAsync(channel, msg.Content, Sim.LatestSnapshot);
+    }
+
+    private (RadioChannel Channel, string Message) BuildQuickCommand(string commandKey) => commandKey switch
+    {
+        "ack" => (RadioChannel.CommandNet, "ECHO, ALPHA. ROGER. TRACKING CURRENT PICTURE."),
+        "picture" => (RadioChannel.CommandNet, "ECHO, ALPHA. REQUEST PICTURE."),
+        "status" => (RadioChannel.CommandNet,
+            $"ECHO, ALPHA. SITREP. TRACKS {TrackCount}, HOSTILES {HostileCount}, READY {ReadyLaunchers}, RESERVE {ReserveMissiles}."),
+        "declare" when SelectedTrack != null => (RadioChannel.CommandNet,
+            $"ECHO, ALPHA. REQUEST DECLARE {SelectedTrackId}. {BuildTrackBraa(SelectedTrack)}."),
+        "weapons_free" => (RadioChannel.CommandNet,
+            $"ECHO, ALPHA. REQUEST WEAPONS FREE. {(SelectedTrackId ?? "HOSTILE GROUP")} CLOSING."),
+        "intel" => (RadioChannel.IntelNet,
+            SelectedTrack != null
+                ? $"INTEL, ALPHA. ASSESS {SelectedTrackId}. {BuildTrackBraa(SelectedTrack)}."
+                : "INTEL, ALPHA. ASSESS HIGHEST THREAT CONTACT."),
+        _ => (ActiveChannel, string.Empty)
+    };
+
+    private void RefreshSelectedTrackReadout()
+    {
+        SelectedTrackBraa = SelectedTrack != null ? BuildTrackBraa(SelectedTrack) : "BRAA ---";
+        SelectedTrackThreatText = SelectedTrack != null
+            ? $"{SelectedTrack.Classification.ToString().ToUpper()} | {SelectedTrack.AspectString.ToUpper()} | {BuildThreatBand(SelectedTrack.ThreatLevel)}"
+            : "NO TARGET SELECTED";
+        SelectedTrackEnvelopeText = BuildEnvelopeSummary(SelectedTrack);
+    }
+
+    private void RefreshCommandStates()
+    {
+        DesignateSelectedCommand.NotifyCanExecuteChanged();
+        FireSingleCommand.NotifyCanExecuteChanged();
+        FireSalvoCommand.NotifyCanExecuteChanged();
+    }
+
+    private void RefreshUnreadCounts()
+    {
+        CommandUnreadCount = Sim.Comms.UnreadCount(RadioChannel.CommandNet);
+        BatteryUnreadCount = Sim.Comms.UnreadCount(RadioChannel.BatteryNet);
+        IntelUnreadCount = Sim.Comms.UnreadCount(RadioChannel.IntelNet);
+        OnPropertyChanged(nameof(CommandChannelLabel));
+        OnPropertyChanged(nameof(BatteryChannelLabel));
+        OnPropertyChanged(nameof(IntelChannelLabel));
+    }
+
+    private void RefreshAiBindings()
+    {
+        OnPropertyChanged(nameof(AiStatusText));
+        OnPropertyChanged(nameof(AiModelText));
+        OnPropertyChanged(nameof(AiEndpointText));
+    }
+
+    private void RefreshDerivedBindings()
+    {
+        OnPropertyChanged(nameof(ThreatSummaryText));
+        RefreshAiBindings();
+    }
+
+    private void ResetUiForScenarioLoad()
+    {
+        CommandNetMessages.Clear();
+        BatteryNetMessages.Clear();
+        IntelNetMessages.Clear();
+        AllMessagesRecent.Clear();
+        ThreatBoardTracks.Clear();
+        Sim.Comms.MarkAllRead(RadioChannel.CommandNet);
+        Sim.Comms.MarkAllRead(RadioChannel.BatteryNet);
+        Sim.Comms.MarkAllRead(RadioChannel.IntelNet);
+        SelectedTrackId = null;
+        SelectedTrack = null;
+        RefreshSelectedTrackReadout();
+        RefreshUnreadCounts();
+    }
+
+    private static string BuildTrackBraa(TrackFile track) =>
+        $"BRAA {track.BearingDeg:000}/{track.RangeNm:0.0} ANGELS {track.AltitudeFt / 1000:0.0} {track.AspectString.ToUpper()}";
+
+    private static string BuildThreatBand(double threatLevel) => threatLevel switch
+    {
+        >= 0.7 => "HIGH THREAT",
+        >= 0.4 => "MEDIUM THREAT",
+        _ => "LOW THREAT"
+    };
+
+    private static string BuildEnvelopeSummary(TrackFile? track)
+    {
+        if (track == null)
+            return "ENGAGEMENT WINDOW: STANDBY";
+
+        return track.RangeNm switch
+        {
+            > 18 => "ENGAGEMENT WINDOW: OUTSIDE MAX RANGE",
+            < 2.5 => "ENGAGEMENT WINDOW: BELOW MIN RANGE",
+            _ => "ENGAGEMENT WINDOW: VALID"
+        };
+    }
+
+    private static string BuildWeatherSummary(SimulationSnapshot snapshot) =>
+        $"WX {snapshot.Weather.Description.ToUpper()} | VIS {snapshot.Weather.VisibilityNm:0}NM | CEIL {snapshot.Weather.CloudCeilingFt:0}FT";
 
     private static void DispatchToUI(Action action)
     {
@@ -561,6 +781,99 @@ public partial class MainViewModel : ObservableObject
             MaxEnemyBreakthroughs = 0
         }
     };
+
+    private static ScenarioDefinition CreateOperationDeadskyScenario() => new()
+    {
+        Name = "Operation DEADSKY",
+        Description = "Layered hostile strike with escorts, decoys, and a late jammer push.",
+        DurationMinutes = 24,
+        PlayerBattery = new PlayerBatteryConfig
+        {
+            Callsign = "ALPHA", Type = "SA-11 BUK",
+            Launchers = 4, ReserveMissiles = 16, RadarRangeNm = 120,
+            EngagementRangeNm = 20, MissileType = "9M38", MissilePk = 0.68,
+            InitialROE = "weapons_tight", InitialAlert = "yellow"
+        },
+        Command = new CommandConfig
+        {
+            Callsign = "ECHO", InitialROE = "weapons_tight", InitialAlert = "yellow",
+            OpeningMessage = "ALPHA, ECHO. EXPECT MULTI-AXIS STRIKE PACKAGE. INITIAL ROE WEAPONS TIGHT. HOLD FIRE UNTIL DECLARE OR HOSTILE ACT CONFIRMED."
+        },
+        EnemyForces = new EnemyForcesConfig
+        {
+            Objective = "Penetrate sector air defenses and strike depot complex",
+            Waves = new List<WaveConfig>
+            {
+                new WaveConfig
+                {
+                    Trigger = "time", TimeMinutes = 0.4,
+                    Aircraft = new List<AircraftSpawnConfig>
+                    {
+                        new AircraftSpawnConfig
+                        {
+                            Type = "MiG-29", Count = 2,
+                            SpawnBearingDeg = 30, SpawnRangeNm = 125,
+                            SpawnAltitudeFt = 22000, SpawnHeadingDeg = 215,
+                            SpawnSpeedKts = 480, InitialBehavior = "ingress_attack",
+                            Aggressiveness = 0.65
+                        }
+                    }
+                },
+                new WaveConfig
+                {
+                    Trigger = "time", TimeMinutes = 2.1,
+                    Aircraft = new List<AircraftSpawnConfig>
+                    {
+                        new AircraftSpawnConfig
+                        {
+                            Type = "MQ-9", Count = 2,
+                            SpawnBearingDeg = 75, SpawnRangeNm = 118,
+                            SpawnAltitudeFt = 14000, SpawnHeadingDeg = 240,
+                            SpawnSpeedKts = 260, InitialBehavior = "feint",
+                            Aggressiveness = 0.35
+                        },
+                        new AircraftSpawnConfig
+                        {
+                            Type = "SU-24", Count = 2,
+                            SpawnBearingDeg = 58, SpawnRangeNm = 122,
+                            SpawnAltitudeFt = 19000, SpawnHeadingDeg = 235,
+                            SpawnSpeedKts = 440, InitialBehavior = "ingress_attack",
+                            Aggressiveness = 0.72
+                        }
+                    }
+                },
+                new WaveConfig
+                {
+                    Trigger = "time", TimeMinutes = 5.8,
+                    Aircraft = new List<AircraftSpawnConfig>
+                    {
+                        new AircraftSpawnConfig
+                        {
+                            Type = "SU-24", Count = 1,
+                            SpawnBearingDeg = 110, SpawnRangeNm = 135,
+                            SpawnAltitudeFt = 9000, SpawnHeadingDeg = 250,
+                            SpawnSpeedKts = 430, InitialBehavior = "ecm_standoff",
+                            Aggressiveness = 0.55
+                        },
+                        new AircraftSpawnConfig
+                        {
+                            Type = "MiG-29", Count = 2,
+                            SpawnBearingDeg = 102, SpawnRangeNm = 128,
+                            SpawnAltitudeFt = 17000, SpawnHeadingDeg = 248,
+                            SpawnSpeedKts = 500, InitialBehavior = "terrain_following",
+                            Aggressiveness = 0.76
+                        }
+                    }
+                }
+            }
+        },
+        VictoryConditions = new VictoryConditionsConfig
+        {
+            Win = "Break up the raid and keep the depot intact.",
+            Lose = "Strike package breaks through to the depot complex.",
+            MaxEnemyBreakthroughs = 1
+        }
+    };
 }
 
 // ── Child ViewModels ───────────────────────────────────────────────────────
@@ -593,6 +906,7 @@ public partial class TrackRowViewModel : ObservableObject
     [ObservableProperty] private string _speedText = "";
     [ObservableProperty] private string _threatText = "";
     [ObservableProperty] private string _rowColor = "#00DC00";
+    [ObservableProperty] private Brush _rowBrush = Brushes.LimeGreen;
     [ObservableProperty] private string _aspect = "";
 
     public TrackRowViewModel(TrackFile track) { Update(track); }
@@ -614,6 +928,7 @@ public partial class TrackRowViewModel : ObservableObject
             TrackClassification.Friendly => "#3296FF",
             _ => "#FFFF50"
         };
+        RowBrush = (Brush)new BrushConverter().ConvertFromString(RowColor)!;
     }
 }
 
