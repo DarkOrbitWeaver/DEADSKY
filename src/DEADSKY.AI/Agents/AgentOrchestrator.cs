@@ -361,8 +361,9 @@ public class AgentOrchestrator
     }
 
     /// <summary>Ping model and mark unavailable if not responding</summary>
-    public async Task CheckAvailabilityAsync()
+    public async Task<bool> CheckAvailabilityAsync()
     {
         _aiAvailable = await _client.PingAsync();
+        return _aiAvailable;
     }
 }

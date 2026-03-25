@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -16,6 +17,7 @@ using DEADSKY.Core.Progression;
 using DEADSKY.Core.Radar;
 using DEADSKY.Core.Scenario;
 using DEADSKY.Core.Simulation;
+using DEADSKY.Core.Weapons;
 
 namespace DEADSKY.App.ViewModels;
 
@@ -131,7 +133,7 @@ public partial class MainViewModel : ObservableObject
         AI = new AgentOrchestrator(client, toolRegistry, commanderProfile, _tactics);
 
         bool available = await AI.CheckAvailabilityAsync();
-        AIAvailable = available;
+        AiAvailable = available;
         SetStatus(available ? "AI ONLINE — Nemotron connected" : "AI OFFLINE — running without AI");
 
         // Hook AI into sim tick
@@ -224,7 +226,7 @@ public partial class MainViewModel : ObservableObject
             SetStatus($"MISSILE AWAY — {SelectedTrackId}");
         }
         else
-            SetStatus($"FIRE DENIED — {Sim.Weapons.EngagementError}");
+            SetStatus($"FIRE DENIED — {Sim.Weapons.LastError}");
     }
 
     private bool CanFire() => SelectedTrackId != null && SimulationRunning &&

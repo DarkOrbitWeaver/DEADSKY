@@ -53,6 +53,10 @@
     <SolidColorBrush x:Key="UnknownBrush" Color="{StaticResource Unknown}"/>
     <SolidColorBrush x:Key="MissileBrush" Color="{StaticResource MissileColor}"/>
     <SolidColorBrush x:Key="InputBgBrush" Color="{StaticResource InputBg}"/>
+    <SolidColorBrush x:Key="ButtonNormalBrush" Color="{StaticResource ButtonNormal}"/>
+    <SolidColorBrush x:Key="ButtonHoverBrush" Color="{StaticResource ButtonHover}"/>
+    <SolidColorBrush x:Key="ButtonActiveBrush" Color="{StaticResource ButtonActive}"/>
+    <SolidColorBrush x:Key="ButtonDangerBrush" Color="{StaticResource ButtonDanger}"/>
 
     <!-- ══ FONTS ══════════════════════════════════════════════════════════ -->
     <FontFamily x:Key="MonoFont">
@@ -73,7 +77,6 @@
         <Setter Property="FontFamily" Value="{StaticResource MonoFont}"/>
         <Setter Property="FontSize" Value="11"/>
         <Setter Property="FontWeight" Value="Bold"/>
-        <Setter Property="CharacterSpacing" Value="150"/>
     </Style>
     <Style x:Key="SmallText" TargetType="TextBlock">
         <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
@@ -95,7 +98,7 @@
 
     <!-- ══ BUTTON STYLES ══════════════════════════════════════════════════ -->
     <Style x:Key="MilButton" TargetType="Button">
-        <Setter Property="Background" Value="{StaticResource ButtonNormal}"/>
+        <Setter Property="Background" Value="{StaticResource ButtonNormalBrush}"/>
         <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
         <Setter Property="BorderBrush" Value="{StaticResource PanelBorderBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
@@ -176,7 +179,7 @@
         <Setter Property="CornerRadius" Value="2"/>
     </Style>
 
-    <Style x:Key="PanelHeader" TargetType="Border">
+    <Style x:Key="PanelHeaderStyle" TargetType="Border">
         <Setter Property="Background" Value="{StaticResource PanelHeaderBrush}"/>
         <Setter Property="BorderBrush" Value="{StaticResource PanelBorderBrush}"/>
         <Setter Property="BorderThickness" Value="0,0,0,1"/>

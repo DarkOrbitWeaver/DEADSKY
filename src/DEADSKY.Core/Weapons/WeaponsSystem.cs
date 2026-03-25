@@ -33,6 +33,7 @@ public class WeaponsSystem
     private readonly TrackManager _tracks;
 
     public List<EngagementRecord> EngagementHistory { get; } = new();
+    public string LastError { get; private set; } = "";
 
     // Events
     public event Action<SAMMissile, Entity>? MissileLaunched;
@@ -98,7 +99,7 @@ public class WeaponsSystem
         var track = _tracks.GetById(trackId);
         if (track == null)
         {
-            EngagementError?.Invoke($"Track {trackId} not found");
+            RaiseError($"Track {trackId} not found");
             return false;
         }
 
@@ -114,12 +115,12 @@ public class WeaponsSystem
     public EngagementResult FireAtDesignated(SAMBattery battery, string trackId)
     {
         var track = _tracks.GetById(trackId);
-        if (track == null) { EngagementError?.Invoke("No designated target"); return EngagementResult.MissDirect; }
+        if (track == null) { RaiseError("No designated target"); return EngagementResult.MissDirect; }
 
         Entity? target = track.EntityId != null ? _entities.Get(track.EntityId) : null;
         if (target == null || !target.IsActive)
         {
-            EngagementError?.Invoke("Target no longer active");
+            RaiseError("Target no longer active");
             return EngagementResult.AlreadyDestroyed;
         }
 
@@ -132,7 +133,7 @@ public class WeaponsSystem
             string reason = rangeNm > battery.MissileMaxRangeNm ? "Target out of range" :
                            rangeNm < battery.MissileMinRangeNm ? "Target too close (min range)" :
                            "Target outside altitude envelope";
-            EngagementError?.Invoke(reason);
+            RaiseError(reason);
             return EngagementResult.MissDirect;
         }
 
@@ -140,7 +141,7 @@ public class WeaponsSystem
         var launcher = battery.GetReadyLauncher();
         if (launcher == null)
         {
-            EngagementError?.Invoke("No launchers ready — still reloading");
+            RaiseError("No launchers ready — still reloading");
             return EngagementResult.MissDirect;
         }
 
@@ -150,7 +151,7 @@ public class WeaponsSystem
             // Only allow if we're being directly attacked
             if (!battery.IsUnderAttack)
             {
-                EngagementError?.Invoke("WEAPONS HOLD — cannot engage");
+                RaiseError("WEAPONS HOLD — cannot engage");
                 return EngagementResult.MissDirect;
             }
         }
@@ -159,7 +160,7 @@ public class WeaponsSystem
             if (track.Classification != TrackClassification.Hostile &&
                 track.Classification != TrackClassification.AssumedHostile)
             {
-                EngagementError?.Invoke("WEAPONS TIGHT — target not confirmed hostile");
+                RaiseError("WEAPONS TIGHT — target not confirmed hostile");
                 return EngagementResult.MissDirect;
             }
         }
@@ -283,5 +284,11 @@ public class WeaponsSystem
     {
         double singlePk = CalculatePk(battery, track);
         return 1.0 - Math.Pow(1.0 - singlePk, salvoCount);
+    }
+
+    private void RaiseError(string message)
+    {
+        LastError = message;
+        EngagementError?.Invoke(message);
     }
 }

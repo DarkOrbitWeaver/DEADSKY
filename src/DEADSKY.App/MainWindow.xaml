@@ -1,12 +1,203 @@
-﻿<Window x:Class="DEADSKY.App.MainWindow"
+<Window x:Class="DEADSKY.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:DEADSKY.App"
+        xmlns:controls="clr-namespace:DEADSKY.App.Controls"
+        xmlns:comms="clr-namespace:DEADSKY.Core.Comms;assembly=DEADSKY.Core"
         mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        Title="DEADSKY Command Console"
+        Height="920"
+        Width="1540"
+        Background="{StaticResource ConsoleBgBrush}"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="42"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="230"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="2.1*"/>
+            <ColumnDefinition Width="1*"/>
+        </Grid.ColumnDefinitions>
 
+        <Border Grid.Row="0" Grid.ColumnSpan="2" Style="{StaticResource MilPanel}" Padding="10,6">
+            <DockPanel>
+                <TextBlock Text="DEADSKY // KOVRAN THEATER" Style="{StaticResource HeaderText}" />
+                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource WarningText}" HorizontalAlignment="Right"/>
+            </DockPanel>
+        </Border>
+
+        <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource MilPanel}" Margin="0,10,10,10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="34"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" Style="{StaticResource PanelHeaderStyle}">
+                    <DockPanel>
+                        <TextBlock Text="RADAR DISPLAY" Style="{StaticResource HeaderText}" />
+                        <TextBlock Text="{Binding GameTime}" Style="{StaticResource SmallText}" HorizontalAlignment="Right"/>
+                    </DockPanel>
+                </Border>
+                <controls:RadarDisplay x:Name="RadarScope"
+                                       Grid.Row="1"
+                                       Margin="8"
+                                       Snapshot="{Binding CurrentSnapshot}"
+                                       SelectedTrackId="{Binding SelectedTrackId, Mode=TwoWay}"/>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Grid.Column="1" Margin="0,10,0,10">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Style="{StaticResource MilPanel}" Padding="10" Margin="0,0,0,10">
+                <StackPanel>
+                    <TextBlock Text="MISSION CONTROL" Style="{StaticResource HeaderText}"/>
+                    <TextBlock Text="{Binding MissionName}" Style="{StaticResource PrimaryText}" Margin="0,6,0,2"/>
+                    <TextBlock Text="{Binding AlertLevelText, StringFormat=ALERT: {0}}" Style="{StaticResource WarningText}"/>
+                    <TextBlock Text="{Binding RoeText, StringFormat=ROE: {0}}" Style="{StaticResource PrimaryText}" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding AiAvailable, StringFormat=AI ONLINE: {0}}" Style="{StaticResource SmallText}" Margin="0,2,0,8"/>
+                    <WrapPanel>
+                        <Button Content="LOAD TUTORIAL" Style="{StaticResource MilButton}" Command="{Binding LoadScenarioCommand}" CommandParameter=""/>
+                        <Button Content="START" Style="{StaticResource MilButton}" Command="{Binding StartMissionCommand}" Margin="6,0,0,0"/>
+                        <Button Content="PAUSE" Style="{StaticResource MilButton}" Command="{Binding PauseMissionCommand}" Margin="6,0,0,0"/>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Content="SEARCH" Style="{StaticResource MilButton}" Command="{Binding SetRadarSearchCommand}"/>
+                        <Button Content="TWS" Style="{StaticResource MilButton}" Command="{Binding SetRadarTWSCommand}" Margin="6,0,0,0"/>
+                        <Button Content="SILENT" Style="{StaticResource MilButton}" Command="{Binding SetRadarSilentCommand}" Margin="6,0,0,0"/>
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="1" Style="{StaticResource MilPanel}" Padding="10" Margin="0,0,0,10">
+                <StackPanel>
+                    <TextBlock Text="WEAPONS" Style="{StaticResource HeaderText}"/>
+                    <TextBlock Text="{Binding SelectedTrackId, StringFormat=TRACK: {0}}" Style="{StaticResource PrimaryText}" Margin="0,6,0,0"/>
+                    <TextBlock Text="{Binding ReadyLaunchers, StringFormat=READY LAUNCHERS: {0}}" Style="{StaticResource PrimaryText}" />
+                    <TextBlock Text="{Binding ReserveMissiles, StringFormat=RESERVE MISSILES: {0}}" Style="{StaticResource PrimaryText}" />
+                    <TextBlock Text="{Binding ConfirmedKills, StringFormat=CONFIRMED KILLS: {0}}" Style="{StaticResource PrimaryText}" />
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Content="DESIGNATE" Style="{StaticResource MilButton}" Command="{Binding DesignateSelectedCommand}"/>
+                        <Button Content="FIRE 1" Style="{StaticResource EngageButton}" Command="{Binding FireSingleCommand}" Margin="6,0,0,0"/>
+                        <Button Content="SALVO" Style="{StaticResource EngageButton}" Command="{Binding FireSalvoCommand}" Margin="6,0,0,0"/>
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2" Style="{StaticResource MilPanel}" Margin="0,0,0,10">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="34"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Border Grid.Row="0" Style="{StaticResource PanelHeaderStyle}">
+                        <TextBlock Text="THREAT BOARD" Style="{StaticResource HeaderText}"/>
+                    </Border>
+                    <ListView x:Name="ThreatList"
+                              Grid.Row="1"
+                              ItemsSource="{Binding ThreatBoardTracks}"
+                              Background="Transparent"
+                              BorderThickness="0">
+                        <ListView.View>
+                            <GridView AllowsColumnReorder="False">
+                                <GridViewColumn Header="ID" DisplayMemberBinding="{Binding TrackId}" Width="60"/>
+                                <GridViewColumn Header="DESIG" DisplayMemberBinding="{Binding Designation}" Width="100"/>
+                                <GridViewColumn Header="CLS" DisplayMemberBinding="{Binding Classification}" Width="85"/>
+                                <GridViewColumn Header="BRG" DisplayMemberBinding="{Binding Bearing}" Width="55"/>
+                                <GridViewColumn Header="RNG" DisplayMemberBinding="{Binding RangeText}" Width="50"/>
+                                <GridViewColumn Header="ALT" DisplayMemberBinding="{Binding AltitudeText}" Width="55"/>
+                                <GridViewColumn Header="SPD" DisplayMemberBinding="{Binding SpeedText}" Width="55"/>
+                                <GridViewColumn Header="THREAT" DisplayMemberBinding="{Binding ThreatText}" Width="65"/>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="3" Style="{StaticResource MilPanel}" Padding="10">
+                <StackPanel>
+                    <TextBlock Text="CREW" Style="{StaticResource HeaderText}" />
+                    <ItemsControl ItemsSource="{Binding CrewDisplay}" Margin="0,6,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,1">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="80"/>
+                                        <ColumnDefinition Width="55"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding DisplayName}" Style="{StaticResource PrimaryText}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding RoleText}" Style="{StaticResource SmallText}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Status}" Style="{StaticResource SmallText}" HorizontalAlignment="Right"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="2" Grid.ColumnSpan="2" Style="{StaticResource MilPanel}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="34"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="44"/>
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" Style="{StaticResource PanelHeaderStyle}">
+                    <DockPanel>
+                        <TextBlock Text="COMMS LOG" Style="{StaticResource HeaderText}" />
+                        <TextBlock Text="{Binding ActiveChannel, StringFormat=CHANNEL: {0}}" Style="{StaticResource SmallText}" HorizontalAlignment="Right"/>
+                    </DockPanel>
+                </Border>
+                <ListView Grid.Row="1"
+                          ItemsSource="{Binding AllMessagesRecent}"
+                          Margin="8,6,8,4">
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="70"/>
+                                    <ColumnDefinition Width="120"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding FormattedTime}" Style="{StaticResource SmallText}"/>
+                                <TextBlock Grid.Column="1" Text="{Binding SenderCallsign}" Style="{StaticResource PrimaryText}"/>
+                                <TextBlock Grid.Column="2" Text="{Binding Content}" Style="{StaticResource SmallText}" TextWrapping="Wrap"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+                <Grid Grid.Row="2" Margin="8,0,8,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="90"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="CMD" Style="{StaticResource MilButton}" Command="{Binding SelectChannelCommand}" CommandParameter="{x:Static comms:RadioChannel.CommandNet}"/>
+                    <Button Grid.Column="1" Content="BAT" Style="{StaticResource MilButton}" Margin="6,0,0,0" Command="{Binding SelectChannelCommand}" CommandParameter="{x:Static comms:RadioChannel.BatteryNet}"/>
+                    <Button Grid.Column="2" Content="INT" Style="{StaticResource MilButton}" Margin="6,0,0,0" Command="{Binding SelectChannelCommand}" CommandParameter="{x:Static comms:RadioChannel.IntelNet}"/>
+                    <TextBox Grid.Column="3"
+                             Style="{StaticResource MilTextBox}"
+                             Margin="8,0,0,0"
+                             Text="{Binding InputMessage, UpdateSourceTrigger=PropertyChanged}"/>
+                    <Button Grid.Column="4"
+                            Content="SEND"
+                            Style="{StaticResource MilButton}"
+                            Margin="8,0,0,0"
+                            Command="{Binding SendMessageCommand}"/>
+                </Grid>
+            </Grid>
+        </Border>
     </Grid>
 </Window>

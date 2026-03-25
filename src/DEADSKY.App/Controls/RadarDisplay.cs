@@ -1,4 +1,5 @@
 using SkiaSharp;
+using SkiaSharp.Views.Desktop;
 using SkiaSharp.Views.WPF;
 using System.Windows;
 using System.Windows.Input;
@@ -249,7 +250,8 @@ public class RadarDisplay : SKElement
                 var (px1, py1) = CoordinateSystem.ToRadarScreen(track.History[i].Position, rangeNm, _displayRadius);
                 var (px2, py2) = CoordinateSystem.ToRadarScreen(track.History[i + 1].Position, rangeNm, _displayRadius);
 
-                _trailPaint.Color = GetTrackColor(track) with { Alpha = alpha };
+                var trailColor = GetTrackColor(track);
+                _trailPaint.Color = new SKColor(trailColor.Red, trailColor.Green, trailColor.Blue, alpha);
                 _trailPaint.IsStroke = true;
                 _trailPaint.StrokeWidth = 1.5f;
                 canvas.DrawLine(
@@ -283,10 +285,18 @@ public class RadarDisplay : SKElement
             if (track.TrackId == SelectedTrackId)
             {
                 canvas.DrawCircle(cx, cy, blipSize + 4, _selectedPaint);
-                canvas.DrawCircle(cx, cy, blipSize + 8, _selectedPaint with
+                using var selectedGlowPaint = new SKPaint
                 {
-                    Color = _selectedPaint.Color with { Alpha = 80 }
-                });
+                    Color = new SKColor(
+                        _selectedPaint.Color.Red,
+                        _selectedPaint.Color.Green,
+                        _selectedPaint.Color.Blue,
+                        80),
+                    IsStroke = true,
+                    StrokeWidth = _selectedPaint.StrokeWidth,
+                    IsAntialias = true
+                };
+                canvas.DrawCircle(cx, cy, blipSize + 8, selectedGlowPaint);
             }
 
             // Velocity vector
@@ -301,7 +311,8 @@ public class RadarDisplay : SKElement
             }
 
             // Track ID label
-            _trackLabelPaint.Color = GetTrackColor(track) with { Alpha = 200 };
+            var labelColor = GetTrackColor(track);
+            _trackLabelPaint.Color = new SKColor(labelColor.Red, labelColor.Green, labelColor.Blue, 200);
             canvas.DrawText(track.TrackId.Replace("TRK-", ""), cx + 7, cy - 3, _trackLabelPaint);
 
             // Altitude (small)

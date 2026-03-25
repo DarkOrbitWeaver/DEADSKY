@@ -4,6 +4,7 @@ using DEADSKY.Core.Comms;
 using DEADSKY.Core.Entities;
 using DEADSKY.Core.EnemyAI;
 using DEADSKY.Core.Physics;
+using DEADSKY.Core.Radar;
 using DEADSKY.Core.Simulation;
 
 namespace DEADSKY.AI.Tools;
