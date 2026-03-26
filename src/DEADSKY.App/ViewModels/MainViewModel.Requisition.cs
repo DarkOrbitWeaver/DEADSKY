@@ -18,6 +18,12 @@ public partial class MainViewModel
     public string CareerSummaryText => $"CAREER: {Profile.MissionsCompleted} MISSIONS | {Profile.TotalKills} KILLS";
     public string OwnedUpgradeSummaryText => RequisitionTerminal.BuildOwnedSummary();
     public string PendingDeliverySummaryText => RequisitionTerminal.BuildPendingSummary();
+    public string ArmoryHeadlineText => RequisitionTerminal.PendingDeliveries.Count == 0
+        ? "ARMORY STATUS: FIELD-READY"
+        : $"ARMORY STATUS: {RequisitionTerminal.PendingDeliveries.Count} DELIVERY{(RequisitionTerminal.PendingDeliveries.Count == 1 ? string.Empty : "IES")} INBOUND";
+    public string LogisticsTempoText => RequisitionTerminal.OwnedItemIds.Count == 0
+        ? "No requisitioned improvements are installed yet. Use this menu to expand the station's reach, resilience, and coordination."
+        : $"{RequisitionTerminal.OwnedItemIds.Count} requisitioned improvement{(RequisitionTerminal.OwnedItemIds.Count == 1 ? string.Empty : "s")} are already shaping live combat behavior.";
     public string LogisticsStatusText => RequisitionTerminal.PendingDeliveries.Count == 0
         ? "LOGISTICS STATUS: FIELD STOCK ON HAND."
         : "LOGISTICS STATUS: REMOTE DEPOT CONSIGNMENTS IN TRANSIT.";
@@ -88,6 +94,18 @@ public partial class MainViewModel
                     : affordable
                         ? "READY FOR ISSUE"
                         : "INSUFFICIENT BUDGET";
+            option.OrderActionText = owned
+                ? "INSTALLED"
+                : pending
+                    ? "IN TRANSIT"
+                    : available
+                        ? "ORDER"
+                        : rankLocked
+                            ? "RANK LOCK"
+                            : affordable
+                                ? "STANDBY"
+                                : "BUDGET LOW";
+            option.RefreshComputedState();
         }
 
         PurchaseUpgradeCommand.NotifyCanExecuteChanged();
@@ -96,6 +114,8 @@ public partial class MainViewModel
         OnPropertyChanged(nameof(CareerSummaryText));
         OnPropertyChanged(nameof(OwnedUpgradeSummaryText));
         OnPropertyChanged(nameof(PendingDeliverySummaryText));
+        OnPropertyChanged(nameof(ArmoryHeadlineText));
+        OnPropertyChanged(nameof(LogisticsTempoText));
         OnPropertyChanged(nameof(LogisticsStatusText));
         OnPropertyChanged(nameof(StoreAvailabilityText));
     }
@@ -130,15 +150,58 @@ public partial class RequisitionOptionViewModel : ObservableObject
     public string Id => Item.Id;
     public string DisplayName => Item.DisplayName;
     public string Category => Item.Category.ToString().ToUpperInvariant();
+    public string CategoryBadgeText => Item.Category switch
+    {
+        RequisitionCategory.Radar => "SENSOR",
+        RequisitionCategory.Missiles => "WEAPON",
+        RequisitionCategory.Launchers => "LAUNCHER",
+        RequisitionCategory.Electronics => "NETWORK",
+        _ => Category
+    };
     public string Description => Item.Description;
     public string CostText => $"{Item.Cost:N0} OB";
     public string RequirementText => Item.MinimumRank == PlayerRank.Lieutenant
         ? "STANDARD ISSUE"
         : $"REQUIRES {Item.MinimumRank.ToString().ToUpperInvariant()}";
+    public string LeadTimeText => Item.LeadTimeMissions == 0
+        ? "INSTALLS IMMEDIATELY"
+        : Item.LeadTimeMissions == 1
+            ? "ETA: AFTER 1 OPERATION"
+            : $"ETA: AFTER {Item.LeadTimeMissions} OPERATIONS";
+    public string ImpactText => Item.Id switch
+    {
+        "low_alt_module" => "Improves low-level detection and terrain-mask resistance in the live picture.",
+        "eccm_suite" => "Cuts jamming pressure and stabilizes track quality under hostile ECM.",
+        "rapid_reload" => "Reduces launcher turnaround so the battery can sustain longer fights.",
+        "reserve_missile_crate" => "Adds depth to the magazine immediately for extended battles.",
+        "long_range_missiles" => "Unlocks the outer-ring 48N6 shot for early raid breakup.",
+        "ir_point_defense" => "Unlocks a passive close-defense option when radar support is degraded.",
+        "proximity_frag_upgrade" => "Raises baseline lethality across every compatible missile shot.",
+        "backup_power" => "Keeps the station fighting through power hits and partial disruption.",
+        "hardened_comms" => "Improves comms resilience and support reliability during crisis traffic.",
+        "data_link" => "Strengthens the shared operational picture for AI, command, and support tools.",
+        "decoy_emitter" => "Improves support survivability against hostile targeting and retaliation.",
+        _ => "Adds a live operational improvement to the station."
+    };
+    public string AvailabilityText => IsOwned
+        ? "LIVE IN STATION"
+        : IsRankLocked
+            ? "RANK GATED"
+            : IsAvailable
+                ? "READY TO ORDER"
+                : IsAffordable
+                    ? "COMBAT LOCKED"
+                    : "WAITING ON BUDGET";
 
     [ObservableProperty] private bool _isOwned;
     [ObservableProperty] private bool _isRankLocked;
     [ObservableProperty] private bool _isAffordable = true;
     [ObservableProperty] private bool _isAvailable;
     [ObservableProperty] private string _statusText = "READY FOR ISSUE";
+    [ObservableProperty] private string _orderActionText = "ORDER";
+
+    public void RefreshComputedState()
+    {
+        OnPropertyChanged(nameof(AvailabilityText));
+    }
 }

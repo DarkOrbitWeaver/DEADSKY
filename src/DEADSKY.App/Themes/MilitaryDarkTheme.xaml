@@ -23,6 +23,10 @@
     <Color x:Key="AlertOrange">#FF9852</Color>
     <Color x:Key="AlertRed">#FF6B57</Color>
     <Color x:Key="AlertBlack">#6A1E1E</Color>
+    <Color x:Key="CardAccentBlue">#5AA8FF</Color>
+    <Color x:Key="CardAccentGreen">#74C26E</Color>
+    <Color x:Key="CardAccentAmber">#F0BD4D</Color>
+    <Color x:Key="CardAccentRed">#FF6B57</Color>
 
     <Color x:Key="TextPrimary">#D8E5EC</Color>
     <Color x:Key="TextSecondary">#94A9B8</Color>
@@ -59,6 +63,10 @@
     <SolidColorBrush x:Key="TextInfoBrush" Color="{StaticResource TextInfo}"/>
     <SolidColorBrush x:Key="TextAccentBrush" Color="{StaticResource TextAccent}"/>
     <SolidColorBrush x:Key="TextDimBrush" Color="{StaticResource TextDim}"/>
+    <SolidColorBrush x:Key="CardAccentBlueBrush" Color="{StaticResource CardAccentBlue}"/>
+    <SolidColorBrush x:Key="CardAccentGreenBrush" Color="{StaticResource CardAccentGreen}"/>
+    <SolidColorBrush x:Key="CardAccentAmberBrush" Color="{StaticResource CardAccentAmber}"/>
+    <SolidColorBrush x:Key="CardAccentRedBrush" Color="{StaticResource CardAccentRed}"/>
     <SolidColorBrush x:Key="HostileBrush" Color="{StaticResource Hostile}"/>
     <SolidColorBrush x:Key="FriendlyBrush" Color="{StaticResource Friendly}"/>
     <SolidColorBrush x:Key="UnknownBrush" Color="{StaticResource Unknown}"/>
@@ -84,6 +92,12 @@
         <Setter Property="Foreground" Value="{StaticResource TextHighlightBrush}"/>
         <Setter Property="FontFamily" Value="{StaticResource HUDFont}"/>
         <Setter Property="FontSize" Value="13"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+    </Style>
+    <Style x:Key="SectionKicker" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextInfoBrush}"/>
+        <Setter Property="FontFamily" Value="{StaticResource MonoFont}"/>
+        <Setter Property="FontSize" Value="10"/>
         <Setter Property="FontWeight" Value="Bold"/>
     </Style>
     <Style x:Key="SmallText" TargetType="TextBlock">
@@ -119,6 +133,18 @@
     </Style>
     <Style x:Key="StatusBadgeText" TargetType="TextBlock" BasedOn="{StaticResource SmallText}">
         <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style x:Key="MetricValueText" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextHighlightBrush}"/>
+        <Setter Property="FontFamily" Value="{StaticResource HUDFont}"/>
+        <Setter Property="FontSize" Value="18"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+    </Style>
+    <Style x:Key="MetricLabelText" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+        <Setter Property="FontFamily" Value="{StaticResource MonoFont}"/>
+        <Setter Property="FontSize" Value="10"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
     </Style>
 
@@ -291,6 +317,19 @@
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="CornerRadius" Value="6"/>
     </Style>
+    <Style x:Key="MilInsetCard" TargetType="Border">
+        <Setter Property="Background" Value="#0B1319"/>
+        <Setter Property="BorderBrush" Value="{StaticResource PanelBorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Padding" Value="10,8"/>
+    </Style>
+    <Style x:Key="MilAccentCard" TargetType="Border" BasedOn="{StaticResource MilInsetCard}">
+        <Setter Property="Background" Value="#101B23"/>
+    </Style>
+    <Style x:Key="MilMetricCard" TargetType="Border" BasedOn="{StaticResource MilInsetCard}">
+        <Setter Property="Padding" Value="10,10"/>
+    </Style>
 
     <Style x:Key="PanelHeaderStyle" TargetType="Border">
         <Setter Property="Background" Value="{StaticResource PanelHeaderBrush}"/>
@@ -305,6 +344,16 @@
         <Setter Property="CornerRadius" Value="10"/>
         <Setter Property="Padding" Value="8,4"/>
         <Setter Property="Margin" Value="0,0,6,6"/>
+    </Style>
+    <Style x:Key="ChipBorder" TargetType="Border" BasedOn="{StaticResource StatusBadge}">
+        <Setter Property="CornerRadius" Value="12"/>
+        <Setter Property="Padding" Value="7,2"/>
+        <Setter Property="Margin" Value="0,0,6,4"/>
+    </Style>
+    <Style x:Key="ChipText" TargetType="TextBlock" BasedOn="{StaticResource SmallText}">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="FontWeight" Value="Bold"/>
     </Style>
 
     <!-- ══ SEPARATOR ══════════════════════════════════════════════════════ -->
@@ -349,6 +398,87 @@
     <!-- ══ SLIDER STYLE ══════════════════════════════════════════════════ -->
     <Style TargetType="Slider">
         <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+    </Style>
+
+    <Style TargetType="ProgressBar">
+        <Setter Property="Foreground" Value="{StaticResource CardAccentBlueBrush}"/>
+        <Setter Property="Background" Value="#15202A"/>
+        <Setter Property="Height" Value="10"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ProgressBar">
+                    <Border Background="{TemplateBinding Background}"
+                            CornerRadius="4"
+                            BorderBrush="#233544"
+                            BorderThickness="1"
+                            Height="{TemplateBinding Height}">
+                        <Grid x:Name="PART_Track">
+                            <Border x:Name="PART_Indicator"
+                                    HorizontalAlignment="Left"
+                                    Background="{TemplateBinding Foreground}"
+                                    CornerRadius="3"
+                                    Margin="1"/>
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="Orientation" Value="Vertical">
+                            <Setter TargetName="PART_Indicator" Property="VerticalAlignment" Value="Bottom"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        <Setter Property="FontFamily" Value="{StaticResource HUDFont}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <Grid Margin="0,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="18"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="Box"
+                                Width="14"
+                                Height="14"
+                                CornerRadius="3"
+                                VerticalAlignment="Center"
+                                Background="#0A1319"
+                                BorderBrush="#3D5B72"
+                                BorderThickness="1"/>
+                        <Path x:Name="Check"
+                              Grid.Column="0"
+                              Margin="3,4,0,0"
+                              HorizontalAlignment="Left"
+                              VerticalAlignment="Top"
+                              Stroke="{StaticResource CardAccentGreenBrush}"
+                              StrokeThickness="2"
+                              Data="M 0 3 L 3 6 L 8 0"
+                              Visibility="Collapsed"/>
+                        <ContentPresenter Grid.Column="1"
+                                          Margin="6,0,0,0"
+                                          VerticalAlignment="Center"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Box" Property="Background" Value="#13241A"/>
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource CardAccentGreenBrush}"/>
+                            <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource CardAccentBlueBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.55"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <Style TargetType="TabControl">
