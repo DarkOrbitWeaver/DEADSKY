@@ -100,6 +100,8 @@ public partial class MainViewModel
             .Where(package => package.IsVisibleInPicture)
             .Select(package => package.PictureLabel)
             .DefaultIfEmpty("NO VISIBLE SUPPORT TRACKS"));
+    public string CommandConfidenceText => $"COMMAND CONFIDENCE: {FriendlySupport.CommandConfidence:P0} // {FriendlySupport.CommandPostureSummary}";
+    public string SupportConsequenceText => FriendlySupport.LiveConsequenceSummary;
     public string ScenarioContractStatusText => CurrentScenarioDefinition == null
         ? "REALISTIC CONTRACT: STANDBY"
         : ScenarioContractValidator.ValidateScenario(CurrentScenarioDefinition).Summary;
@@ -237,6 +239,8 @@ public partial class MainViewModel
         OnPropertyChanged(nameof(SupportStatusBoard));
         OnPropertyChanged(nameof(SupportActivitySummaryText));
         OnPropertyChanged(nameof(VisibleSupportPictureText));
+        OnPropertyChanged(nameof(CommandConfidenceText));
+        OnPropertyChanged(nameof(SupportConsequenceText));
         OnPropertyChanged(nameof(ScenarioContractStatusText));
         OnPropertyChanged(nameof(RadioRulesSummaryText));
     }

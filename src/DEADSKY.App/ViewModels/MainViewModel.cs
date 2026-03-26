@@ -106,6 +106,10 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _recommendationText = "RECOMMENDATION: MAINTAIN SEARCH PATTERN";
     [ObservableProperty] private string _airPictureText = "PICTURE: AIRSPACE CLEAN";
     [ObservableProperty] private string _incomingThreatText = "INCOMING: NONE";
+    [ObservableProperty] private string _objectiveBoardText = "OBJECTIVES: STANDBY";
+    [ObservableProperty] private string _packageSummaryText = "PACKAGES: STANDBY";
+    [ObservableProperty] private string _sectorEventText = "SECTOR EVENT: STANDBY";
+    [ObservableProperty] private string _sectorLoreText = "SECTOR LORE: STANDBY";
     [ObservableProperty] private string _sectorIntegrityText = "SECTOR STATUS: NO OBJECTIVE STATE AVAILABLE.";
     [ObservableProperty] private string _afterActionSummaryText = "AFTER ACTION: NO RECORDED SORTIE.";
     [ObservableProperty] private string _theaterSupportText = "THEATER SUPPORT: FULL STOCKS AND NETWORK COVERAGE AVAILABLE.";
@@ -759,6 +763,7 @@ public partial class MainViewModel : ObservableObject
         var snapshot = Sim.LatestSnapshot;
         Scenario.Update(evt.GameTimeSec);
         FriendlySupport.Tick(evt.DeltaTime, evt.GameTimeSec);
+        FriendlySupport.UpdateOperationalContext(Scenario.CurrentScenario, snapshot, Sim.Weapons.Incidents);
         Events.Update(evt.DeltaTime);
         Crew.Update(evt.DeltaTime,
             underFire: snapshot.HostileTracks.Any(t => t.RangeNm < 25),
@@ -1365,6 +1370,10 @@ public partial class MainViewModel : ObservableObject
         RecommendationText = "RECOMMENDATION: MAINTAIN SEARCH PATTERN";
         AirPictureText = "PICTURE: AIRSPACE CLEAN";
         IncomingThreatText = "INCOMING: NONE";
+        ObjectiveBoardText = "OBJECTIVES: STANDBY";
+        PackageSummaryText = "PACKAGES: STANDBY";
+        SectorEventText = "SECTOR EVENT: STANDBY";
+        SectorLoreText = "SECTOR LORE: STANDBY";
         SectorIntegrityText = "SECTOR STATUS: NO OBJECTIVE STATE AVAILABLE.";
         AfterActionSummaryText = "AFTER ACTION: NO RECORDED SORTIE.";
         TheaterSupportText = "THEATER SUPPORT: FULL STOCKS AND NETWORK COVERAGE AVAILABLE.";
@@ -1424,6 +1433,12 @@ public partial class MainViewModel : ObservableObject
         MissionPhaseText = assessment.MissionPhase;
         ObjectiveStatusText = assessment.ObjectiveStatus;
         RecommendationText = assessment.Recommendation;
+
+        var intel = BattleIntelDirector.Build(Scenario.CurrentScenario, snapshot, Scenario.EnemyBreakthroughs);
+        ObjectiveBoardText = intel.ObjectiveBoard;
+        PackageSummaryText = intel.PackageSummary;
+        SectorEventText = intel.SectorEvent;
+        SectorLoreText = intel.SectorLore;
     }
 
     private void UpdateBattlePicture(SimulationSnapshot snapshot)
@@ -1606,6 +1621,19 @@ public partial class MainViewModel : ObservableObject
                              normalized.Contains("rescue", StringComparison.Ordinal) ||
                              normalized.Contains("downed", StringComparison.Ordinal) ||
                              normalized.Contains("angel", StringComparison.Ordinal);
+        bool blueOnBlueTraffic = normalized.Contains("blue on blue", StringComparison.Ordinal) ||
+                                 normalized.Contains("friendly hit", StringComparison.Ordinal) ||
+                                 normalized.Contains("fratricide", StringComparison.Ordinal);
+        bool releaseLockTraffic = normalized.Contains("release lock", StringComparison.Ordinal) ||
+                                  normalized.Contains("drop lock", StringComparison.Ordinal) ||
+                                  normalized.Contains("break lock", StringComparison.Ordinal);
+        bool divertTraffic = normalized.Contains("divert", StringComparison.Ordinal) ||
+                             normalized.Contains("intercept", StringComparison.Ordinal) ||
+                             normalized.Contains("scramble", StringComparison.Ordinal) ||
+                             normalized.Contains("vector fighters", StringComparison.Ordinal);
+        bool weaponsFreeTraffic = normalized.Contains("weapons free", StringComparison.Ordinal);
+        bool weaponsHoldTraffic = normalized.Contains("weapons hold", StringComparison.Ordinal);
+        bool weaponsTightTraffic = normalized.Contains("weapons tight", StringComparison.Ordinal);
         string? supportType = normalized switch
         {
             _ when normalized.Contains("declare", StringComparison.Ordinal) => "declare",
@@ -1620,9 +1648,90 @@ public partial class MainViewModel : ObservableObject
 
         if (rescueTraffic)
             supportType ??= "sar";
+        if (divertTraffic)
+            supportType ??= "cap";
+        if (normalized.Contains("crossfire", StringComparison.Ordinal) || normalized.Contains("battery support", StringComparison.Ordinal))
+            supportType ??= "battery";
+        if (blueOnBlueTraffic)
+            supportType ??= "sar";
 
         if (supportType != null)
             IssueSupportRequest(supportType);
+
+        if (releaseLockTraffic && SelectedTrack != null)
+        {
+            int aborted = Sim.PlayerAbortTrack(SelectedTrack.TrackId);
+            Sim.PlayerReleaseTrack(SelectedTrack.TrackId);
+            Sim.Weapons.RecordOperationalIncident(
+                "lock_release_order",
+                aborted > 0
+                    ? $"Lock release ordered on {SelectedTrack.TrackId} with abort command in support."
+                    : $"Lock release ordered on {SelectedTrack.TrackId}.",
+                IncidentSeverity.Warning,
+                SelectedTrack.TrackId,
+                SelectedTrack.EntityId);
+            RefreshFromSimulationSnapshot();
+        }
+
+        if (weaponsFreeTraffic && Sim.LatestSnapshot.Battery?.ROE != RulesOfEngagement.WeaponsFree)
+        {
+            Sim.SetROE(RulesOfEngagement.WeaponsFree, "ECHO ACTUAL AUTHORIZED WEAPONS FREE");
+            Sim.Comms.Queue(CommManager.CreateAlliedHQMessage(
+                "ALPHA, ECHO. WEAPONS FREE APPROVED. MAINTAIN POSITIVE ID ON ALL FRIENDLY CORRIDORS.",
+                MessagePriority.Priority));
+            Sim.Weapons.RecordOperationalIncident(
+                "roe_shift",
+                "Weapons free authorized over command net.",
+                IncidentSeverity.Info,
+                SelectedTrack?.TrackId,
+                SelectedTrack?.EntityId);
+        }
+
+        if (weaponsHoldTraffic && Sim.LatestSnapshot.Battery?.ROE != RulesOfEngagement.WeaponsHold)
+        {
+            if (SelectedTrack != null)
+                Sim.PlayerAbortTrack(SelectedTrack.TrackId);
+            Sim.SetROE(RulesOfEngagement.WeaponsHold, "ECHO ACTUAL ORDERED WEAPONS HOLD");
+            Sim.Weapons.RecordOperationalIncident(
+                "weapons_hold_order",
+                "Weapons hold ordered over command net.",
+                IncidentSeverity.Warning,
+                SelectedTrack?.TrackId,
+                SelectedTrack?.EntityId);
+            Sim.Comms.Queue(CommManager.CreateAlliedHQMessage(
+                "ALPHA, ECHO. WEAPONS HOLD. STABILIZE THE PICTURE AND REPORT ANY BREAKTHROUGH IMMEDIATELY.",
+                MessagePriority.Immediate));
+        }
+
+        if (weaponsTightTraffic && Sim.LatestSnapshot.Battery?.ROE != RulesOfEngagement.WeaponsTight)
+        {
+            Sim.SetROE(RulesOfEngagement.WeaponsTight, "ECHO ACTUAL ORDERED WEAPONS TIGHT");
+            Sim.Comms.Queue(CommManager.CreateAlliedHQMessage(
+                "ALPHA, ECHO. WEAPONS TIGHT. DECLARE AND PID REQUIRED BEFORE SHOT AUTHORITY.",
+                MessagePriority.Priority));
+            Sim.Weapons.RecordOperationalIncident(
+                "roe_shift",
+                "Weapons tight ordered over command net.",
+                IncidentSeverity.Info,
+                SelectedTrack?.TrackId,
+                SelectedTrack?.EntityId);
+        }
+
+        if (blueOnBlueTraffic)
+        {
+            if (SelectedTrack != null)
+                Sim.PlayerAbortTrack(SelectedTrack.TrackId);
+            Sim.SetROE(RulesOfEngagement.WeaponsHold, "ECHO ACTUAL BLUE-ON-BLUE PREVENTION");
+            Sim.Weapons.RecordOperationalIncident(
+                "blue_on_blue_warning",
+                "Blue-on-blue warning transmitted on command network. Support posture tightened.",
+                IncidentSeverity.Critical,
+                SelectedTrack?.TrackId,
+                SelectedTrack?.EntityId);
+            Sim.Comms.Queue(CommManager.CreateAlliedHQMessage(
+                "ALPHA, ECHO. BLUE-ON-BLUE WARNING COPIED. CHECK FIRE, HOLD WEAPONS, AND PREPARE RESCUE/DECONFLICTION CHANNELS.",
+                MessagePriority.Immediate));
+        }
 
         if (cautionTraffic)
         {
@@ -1636,11 +1745,20 @@ public partial class MainViewModel : ObservableObject
             if (Sim.LatestSnapshot.Battery?.ROE == RulesOfEngagement.WeaponsFree)
                 Sim.SetROE(RulesOfEngagement.WeaponsTight, "ECHO ACTUAL SAFETY CHECK");
 
+            Sim.Weapons.RecordOperationalIncident(
+                "check_fire_order",
+                "Check-fire traffic tightened engagement discipline.",
+                IncidentSeverity.Warning,
+                SelectedTrack?.TrackId,
+                SelectedTrack?.EntityId);
             Sim.Comms.Queue(CommManager.CreateAlliedHQMessage(
                 "ALPHA, ECHO. CHECK FIRE ACKNOWLEDGED. MAINTAIN POSITIVE ID AND REPORT ANY FRIENDLY CONFLICT.",
                 MessagePriority.Immediate));
             FlushPendingRadioTraffic();
         }
+
+        Sim.RefreshSnapshot();
+        RefreshFromSimulationSnapshot();
     }
 
 }

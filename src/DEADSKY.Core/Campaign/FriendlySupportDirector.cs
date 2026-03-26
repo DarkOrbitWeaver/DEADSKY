@@ -2,6 +2,7 @@ using DEADSKY.Core.Comms;
 using DEADSKY.Core.Entities;
 using DEADSKY.Core.Physics;
 using DEADSKY.Core.Scenario;
+using DEADSKY.Core.Simulation;
 
 namespace DEADSKY.Core.Campaign;
 
@@ -34,8 +35,10 @@ public sealed class FriendlySupportPackage
     public string RankOrRole { get; init; } = "";
     public string UnitCallsign { get; init; } = "";
     public string Designation { get; init; } = "";
-    public double Reliability { get; init; }
-    public double Risk { get; init; }
+    public double BaseReliability { get; init; }
+    public double BaseRisk { get; init; }
+    public double Reliability { get; set; }
+    public double Risk { get; set; }
     public SupportAvailabilityState Availability { get; set; } = SupportAvailabilityState.Ready;
     public double DelayRemainingSec { get; set; }
     public double CooldownRemainingSec { get; set; }
@@ -69,6 +72,11 @@ public sealed class FriendlySupportDirector
     private readonly CommManager _comms;
     private readonly List<FriendlySupportPackage> _packages = new();
     private readonly List<SupportRequest> _pendingRequests = new();
+    private int _recentCriticalIncidents;
+
+    public double CommandConfidence { get; private set; } = 1.0;
+    public string CommandPostureSummary { get; private set; } = "COMMAND POSTURE: STEADY.";
+    public string LiveConsequenceSummary { get; private set; } = "SUPPORT CONSEQUENCE: NO LIVE COMMAND STRAIN.";
 
     public FriendlySupportDirector(CommManager comms)
     {
@@ -93,6 +101,8 @@ public sealed class FriendlySupportDirector
             RankOrRole = "GCI",
             UnitCallsign = "SABLE-1",
             Designation = "SECTOR PICTURE CELL",
+            BaseReliability = relayDamaged ? 0.62 : 0.88,
+            BaseRisk = 0.15,
             Reliability = relayDamaged ? 0.62 : 0.88,
             Risk = 0.15,
             Availability = relayDamaged ? SupportAvailabilityState.CoolingDown : SupportAvailabilityState.Ready,
@@ -108,6 +118,8 @@ public sealed class FriendlySupportDirector
             RankOrRole = "ID",
             UnitCallsign = "ORACLE-4",
             Designation = "DECLARATION AND IFF DESK",
+            BaseReliability = relayDamaged ? 0.58 : 0.84,
+            BaseRisk = 0.12,
             Reliability = relayDamaged ? 0.58 : 0.84,
             Risk = 0.12,
             Availability = relayDamaged ? SupportAvailabilityState.CoolingDown : SupportAvailabilityState.Ready,
@@ -123,6 +135,8 @@ public sealed class FriendlySupportDirector
             RankOrRole = "FLT",
             UnitCallsign = "VIPER 1-1",
             Designation = "DIVERTED CAP",
+            BaseReliability = 0.76,
+            BaseRisk = 0.48,
             Reliability = 0.76,
             Risk = 0.48,
             BearingDeg = 285,
@@ -139,6 +153,8 @@ public sealed class FriendlySupportDirector
             RankOrRole = "ECM",
             UnitCallsign = "MISTRAL-2",
             Designation = "STANDOFF JAMMER CELL",
+            BaseReliability = 0.71,
+            BaseRisk = 0.37,
             Reliability = 0.71,
             Risk = 0.37,
             BearingDeg = 330,
@@ -155,6 +171,8 @@ public sealed class FriendlySupportDirector
             RankOrRole = "CRC",
             UnitCallsign = "LANTERN-6",
             Designation = "AIRBORNE EARLY WARNING",
+            BaseReliability = 0.83,
+            BaseRisk = 0.22,
             Reliability = 0.83,
             Risk = 0.22,
             BearingDeg = 018,
@@ -171,6 +189,8 @@ public sealed class FriendlySupportDirector
             RankOrRole = "BATTERY",
             UnitCallsign = "BRAVO",
             Designation = "ADJACENT SAM BATTERY",
+            BaseReliability = 0.8,
+            BaseRisk = 0.31,
             Reliability = 0.8,
             Risk = 0.31,
             BearingDeg = 142,
@@ -187,6 +207,8 @@ public sealed class FriendlySupportDirector
             RankOrRole = "COMMS",
             UnitCallsign = "RELAY-2",
             Designation = "NETWORK RESTORATION TEAM",
+            BaseReliability = 0.74,
+            BaseRisk = 0.18,
             Reliability = 0.74,
             Risk = 0.18,
             LastSummary = "Ready to restore strained network links."
@@ -200,6 +222,8 @@ public sealed class FriendlySupportDirector
             RankOrRole = "CSAR",
             UnitCallsign = "ANGEL-3",
             Designation = "COMBAT RESCUE DET",
+            BaseReliability = 0.68,
+            BaseRisk = 0.52,
             Reliability = 0.68,
             Risk = 0.52,
             Availability = scenario == null ? SupportAvailabilityState.Unavailable : SupportAvailabilityState.Ready,
@@ -260,6 +284,85 @@ public sealed class FriendlySupportDirector
         _pendingRequests.RemoveAll(request => gameTimeSec - request.RequestedAtSec > 900);
     }
 
+    public void UpdateOperationalContext(
+        ScenarioDefinition? scenario,
+        SimulationSnapshot snapshot,
+        IEnumerable<EngagementIncident>? incidents)
+    {
+        var recentIncidents = incidents?
+            .OrderByDescending(incident => incident.TimestampUtc)
+            .Take(8)
+            .ToList() ?? new List<EngagementIncident>();
+        _recentCriticalIncidents = recentIncidents.Count(incident => incident.Severity == IncidentSeverity.Critical);
+        int recentWarnings = recentIncidents.Count(incident => incident.Severity == IncidentSeverity.Warning);
+
+        int innerRingThreats = snapshot.HostileTracks.Count(track => track.RangeNm <= 25);
+        int highThreats = snapshot.HostileTracks.Count(track => track.ThreatLevel >= 0.65);
+        bool jammingPressure = snapshot.ActiveEcmEffects.Count > 0 ||
+                               snapshot.HostileAircraft.Any(aircraft => aircraft.ECMActive || aircraft.Role == AircraftRole.ECMEscort);
+        string priorityObjective = ResolvePriorityObjective(scenario, snapshot);
+
+        double pressurePenalty = Math.Min(0.38, (snapshot.HostileTracks.Count * 0.03) + (innerRingThreats * 0.05) + (highThreats * 0.03));
+        double incidentPenalty = Math.Min(0.42, (_recentCriticalIncidents * 0.18) + (recentWarnings * 0.06));
+        CommandConfidence = Math.Clamp(1.0 - pressurePenalty - incidentPenalty, 0.25, 1.0);
+
+        CommandPostureSummary = innerRingThreats > 0
+            ? $"COMMAND POSTURE: INNER RING DEFENSE AROUND {priorityObjective}."
+            : _recentCriticalIncidents > 0
+                ? "COMMAND POSTURE: SAFETY-CHECKING FIRE DISCIPLINE AFTER CRITICAL INCIDENT."
+                : snapshot.HostileTracks.Count >= 4
+                    ? "COMMAND POSTURE: RAID RESPONSE ELEVATED WITH SUPPORT ACTORS LEANING FORWARD."
+                    : "COMMAND POSTURE: CONTROLLED WATCH WITH NORMAL SUPPORT AVAILABILITY.";
+
+        LiveConsequenceSummary = _recentCriticalIncidents > 0
+            ? "SUPPORT CONSEQUENCE: COMMAND TRUST REDUCED. HIGH-RISK TASKING MAY BE DELAYED."
+            : innerRingThreats > 0
+                ? $"SUPPORT CONSEQUENCE: ACTIVE DEFENSIVE SHIFT TOWARD {priorityObjective}."
+                : jammingPressure
+                    ? "SUPPORT CONSEQUENCE: NETWORK AND PICTURE ASSETS LEANING INTO ECM PRESSURE."
+                    : "SUPPORT CONSEQUENCE: SUPPORT NETWORK HOLDING NORMAL TEMPO.";
+
+        foreach (var package in _packages)
+        {
+            package.Reliability = Math.Clamp(package.BaseReliability * (0.82 + (CommandConfidence * 0.18)), 0.35, 0.98);
+            double dynamicRisk = package.BaseRisk + (innerRingThreats * 0.02) + (_recentCriticalIncidents * 0.04);
+            if (jammingPressure && package.Type is FriendlySupportType.Awacs or FriendlySupportType.PictureRelay or FriendlySupportType.DeclarationCell)
+                dynamicRisk += 0.05;
+            package.Risk = Math.Clamp(dynamicRisk, 0.05, 0.95);
+
+            if (package.Availability == SupportAvailabilityState.Tasked)
+                continue;
+
+            switch (package.Type)
+            {
+                case FriendlySupportType.CombatAirPatrol when snapshot.HostileTracks.Count >= 3 || innerRingThreats > 0:
+                    package.VisibleUntilSec = Math.Max(package.VisibleUntilSec, 40);
+                    package.LastSummary = $"Pushing intercept cover toward {priorityObjective}.";
+                    break;
+                case FriendlySupportType.Awacs when snapshot.HostileTracks.Count >= 4 || jammingPressure:
+                    package.VisibleUntilSec = Math.Max(package.VisibleUntilSec, 55);
+                    package.LastSummary = jammingPressure
+                        ? "Tightening wide-area picture through ECM pressure."
+                        : $"Leaning forward to maintain raid picture over {priorityObjective}.";
+                    break;
+                case FriendlySupportType.NearbyBattery when innerRingThreats > 0:
+                    package.VisibleUntilSec = Math.Max(package.VisibleUntilSec, 35);
+                    package.LastSummary = $"Crossfire lane shifted toward {priorityObjective}.";
+                    break;
+                case FriendlySupportType.DeclarationCell when _recentCriticalIncidents > 0:
+                    package.LastSummary = "IFF desk cross-checking after weapons safety incident.";
+                    break;
+                case FriendlySupportType.PictureRelay when _recentCriticalIncidents > 0:
+                    package.LastSummary = "Picture cell validating labels after command caution traffic.";
+                    break;
+                case FriendlySupportType.JammingSupport when jammingPressure:
+                    package.VisibleUntilSec = Math.Max(package.VisibleUntilSec, 30);
+                    package.LastSummary = "Support jammer posture tightened under electronic pressure.";
+                    break;
+            }
+        }
+    }
+
     public SupportRequestResult RequestSupport(
         FriendlySupportType type,
         string requestor,
@@ -282,7 +385,22 @@ public sealed class FriendlySupportDirector
             return new SupportRequestResult(false, $"{package.DisplayName} cannot comply. {blocked}", package.Id, 0, false);
         }
 
-        double eta = GetDelay(type);
+        if (_recentCriticalIncidents > 0 &&
+            CommandConfidence < 0.45 &&
+            type is FriendlySupportType.CombatAirPatrol or FriendlySupportType.NearbyBattery)
+        {
+            return new SupportRequestResult(
+                false,
+                $"{package.DisplayName} holding pending command fire-discipline review before further high-risk tasking.",
+                package.Id,
+                0,
+                false);
+        }
+
+        double reliabilityDelay = package.Reliability < 0.6
+            ? (0.6 - package.Reliability) * 0.5
+            : 0.0;
+        double eta = Math.Ceiling(GetDelay(type) * (1.0 + reliabilityDelay + ((1.0 - CommandConfidence) * 0.45)));
         package.Availability = SupportAvailabilityState.Tasked;
         package.DelayRemainingSec = eta;
         package.LastSummary = $"Tasked by {requestor}. {details}";
@@ -330,7 +448,7 @@ public sealed class FriendlySupportDirector
     public string BuildStatusBoard() =>
         _packages.Count == 0
             ? "FRIENDLY SUPPORT: NO PACKAGE DATA."
-            : "FRIENDLY SUPPORT: " + string.Join(" || ", _packages.Select(package => package.StatusLine));
+            : $"FRIENDLY SUPPORT: CONF {CommandConfidence:P0} // " + string.Join(" || ", _packages.Select(package => package.StatusLine));
 
     public IEnumerable<FriendlySupportPackage> GetVisiblePictureAssets() =>
         _packages.Where(package => package.IsVisibleInPicture);
@@ -445,4 +563,25 @@ public sealed class FriendlySupportDirector
     }
 
     private static double NormalizeBearing(double value) => (value % 360 + 360) % 360;
+
+    private static string ResolvePriorityObjective(ScenarioDefinition? scenario, SimulationSnapshot snapshot)
+    {
+        if (scenario == null || scenario.SectorMap.Objectives.Count == 0)
+            return "INNER RING";
+
+        var pressured = scenario.SectorMap.Objectives.FirstOrDefault(objective =>
+            snapshot.HostileTracks.Any(track =>
+                Math.Abs(NormalizeAngle(track.BearingDeg - objective.BearingDeg)) < 18 &&
+                track.RangeNm <= objective.RangeNm + 12));
+
+        return (pressured ?? scenario.SectorMap.Objectives.First()).Name.ToUpperInvariant();
+    }
+
+    private static double NormalizeAngle(double degrees)
+    {
+        double normalized = degrees % 360;
+        if (normalized > 180) normalized -= 360;
+        if (normalized < -180) normalized += 360;
+        return normalized;
+    }
 }

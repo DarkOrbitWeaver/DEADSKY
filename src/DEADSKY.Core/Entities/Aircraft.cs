@@ -7,6 +7,8 @@ public enum AircraftBehavior
     IngressAttack,       // Flying toward target
     EgressRetreat,       // Running away
     OrbitPatrol,         // Racetrack/orbit pattern
+    DefensiveBeam,       // Beaming/notching radar threat
+    EscortCover,         // Fighters pushing forward to cover a striker package
     EvasiveManeuver,     // Random jinking under fire
     TerrainFollowing,    // Hugging the ground
     PopUpAttack,         // Low-level approach then pop-up
@@ -67,6 +69,8 @@ public class Aircraft : Entity
     public bool RadarLockDetected { get; set; }    // RWR is screaming
     public double RadarLockBearingDeg { get; set; }
     public DateTime? RadarLockDetectedTime { get; set; }
+    public bool HardLockDetected { get; set; }
+    public DateTime? HardLockDetectedTime { get; set; }
     public bool MissileInbound { get; set; }
     public DateTime? MissileInboundDetectedTime { get; set; }
     public int ChaffCharges { get; set; } = 4;
@@ -121,6 +125,10 @@ public class Aircraft : Entity
                 ExecuteEvasion(deltaTime);
                 break;
 
+            case AircraftBehavior.DefensiveBeam:
+                ExecuteDefensiveBeam();
+                break;
+
             case AircraftBehavior.TerrainFollowing:
                 RequestedAltitudeM = CoordinateSystem.FtToM(200); // 200ft AGL
                 ExecuteIngress(deltaTime);
@@ -132,6 +140,18 @@ public class Aircraft : Entity
 
             case AircraftBehavior.OrbitPatrol:
                 ExecuteOrbit(deltaTime);
+                break;
+
+            case AircraftBehavior.ECMStandoff:
+                ExecuteEcmStandoff();
+                break;
+
+            case AircraftBehavior.EscortCover:
+                ExecuteEscortCover();
+                break;
+
+            case AircraftBehavior.SEAD:
+                ExecuteSead();
                 break;
 
             case AircraftBehavior.Feint:
@@ -156,13 +176,16 @@ public class Aircraft : Entity
         bool radarSpikeHot = RadarLockDetected &&
                              RadarLockDetectedTime.HasValue &&
                              now - RadarLockDetectedTime.Value <= TimeSpan.FromSeconds(4);
+        bool hardLockHot = HardLockDetected &&
+                           HardLockDetectedTime.HasValue &&
+                           now - HardLockDetectedTime.Value <= TimeSpan.FromSeconds(5);
         bool missileThreatHot = MissileInbound &&
                                 MissileInboundDetectedTime.HasValue &&
                                 now - MissileInboundDetectedTime.Value <= TimeSpan.FromSeconds(8);
 
-        ECMActive = HasECM && (radarSpikeHot || missileThreatHot);
+        ECMActive = HasECM && (radarSpikeHot || hardLockHot || missileThreatHot);
 
-        if (radarSpikeHot && ChaffCharges > 0)
+        if ((radarSpikeHot || hardLockHot) && ChaffCharges > 0)
             DeployChaff();
 
         if (missileThreatHot && FlareCharges > 0)
@@ -178,6 +201,16 @@ public class Aircraft : Entity
             return;
         }
 
+        if ((hardLockHot || radarSpikeHot) && CurrentBehavior != AircraftBehavior.EvasiveManeuver)
+        {
+            if (!IsThreatResponseBehavior(CurrentBehavior))
+                _behaviorBeforeThreatReaction = CurrentBehavior;
+
+            CurrentBehavior = ChooseRadarThreatBehavior();
+            _threatReactionUntilUtc = now.AddSeconds(hardLockHot ? 7 : 5);
+            return;
+        }
+
         if (CurrentBehavior == AircraftBehavior.EvasiveManeuver &&
             _behaviorBeforeThreatReaction.HasValue &&
             _threatReactionUntilUtc.HasValue &&
@@ -187,9 +220,24 @@ public class Aircraft : Entity
             _behaviorBeforeThreatReaction = null;
             _threatReactionUntilUtc = null;
         }
+        else if ((CurrentBehavior == AircraftBehavior.DefensiveBeam ||
+                  CurrentBehavior == AircraftBehavior.ECMStandoff ||
+                  CurrentBehavior == AircraftBehavior.EscortCover ||
+                  CurrentBehavior == AircraftBehavior.SEAD ||
+                  CurrentBehavior == AircraftBehavior.TerrainFollowing) &&
+                 _behaviorBeforeThreatReaction.HasValue &&
+                 _threatReactionUntilUtc.HasValue &&
+                 now >= _threatReactionUntilUtc.Value)
+        {
+            CurrentBehavior = _behaviorBeforeThreatReaction.Value;
+            _behaviorBeforeThreatReaction = null;
+            _threatReactionUntilUtc = null;
+        }
 
         if (!radarSpikeHot)
             RadarLockDetected = false;
+        if (!hardLockHot)
+            HardLockDetected = false;
 
         if (!missileThreatHot)
             MissileInbound = false;
@@ -246,6 +294,17 @@ public class Aircraft : Entity
         RequestedSpeedMps = FlightModel.MaxSpeedMps; // Full afterburner
     }
 
+    private void ExecuteDefensiveBeam()
+    {
+        double beamOffset = AggressivenessLevel >= 0.65 ? 95 : 85;
+        RequestedHeadingDeg = NormalizeHeading(RadarLockBearingDeg + beamOffset);
+        RequestedAltitudeM = Math.Clamp(
+            AltitudeM + CoordinateSystem.FtToM(AggressivenessLevel >= 0.6 ? 1200 : -900),
+            CoordinateSystem.FtToM(800),
+            CoordinateSystem.FtToM(38000));
+        RequestedSpeedMps = FlightModel.MaxSpeedMps * 0.92;
+    }
+
     private void ExecutePopUp(double deltaTime)
     {
         double rangeM = Position.Length;
@@ -274,6 +333,52 @@ public class Aircraft : Entity
         RequestedHeadingDeg = (HeadingDeg + 2.0 * deltaTime + 360) % 360;
     }
 
+    private void ExecuteEcmStandoff()
+    {
+        double rangeNm = CoordinateSystem.MetersToNm(Position.Length);
+        RequestedAltitudeM = CoordinateSystem.FtToM(28000);
+        RequestedSpeedMps = FlightModel.MaxSpeedMps * 0.78;
+
+        if (rangeNm > 46)
+        {
+            RequestedHeadingDeg = Position.HeadingTo(Vec2.Zero);
+            return;
+        }
+
+        RequestedHeadingDeg = NormalizeHeading(RadarLockBearingDeg + 100);
+    }
+
+    private void ExecuteEscortCover()
+    {
+        double rangeNm = CoordinateSystem.MetersToNm(Position.Length);
+        RequestedAltitudeM = CoordinateSystem.FtToM(26000);
+        RequestedSpeedMps = FlightModel.MaxSpeedMps * 0.94;
+
+        if (rangeNm > 24)
+        {
+            RequestedHeadingDeg = Position.HeadingTo(Vec2.Zero);
+            return;
+        }
+
+        RequestedHeadingDeg = NormalizeHeading(RadarLockBearingDeg + 45);
+    }
+
+    private void ExecuteSead()
+    {
+        double rangeNm = CoordinateSystem.MetersToNm(Position.Length);
+        RequestedAltitudeM = CoordinateSystem.FtToM(rangeNm > 22 ? 22000 : 18000);
+        RequestedSpeedMps = FlightModel.MaxSpeedMps * 0.88;
+
+        if (rangeNm <= 16)
+        {
+            CurrentBehavior = AircraftBehavior.EgressRetreat;
+            RequestedHeadingDeg = NormalizeHeading(HeadingDeg + 180);
+            return;
+        }
+
+        RequestedHeadingDeg = Position.HeadingTo(Vec2.Zero);
+    }
+
     private void DeployChaff()
     {
         if (IsChaffActive || ChaffCharges <= 0)
@@ -291,6 +396,30 @@ public class Aircraft : Entity
         FlareCharges--;
         FlareActiveUntilUtc = DateTime.UtcNow.AddSeconds(3);
     }
+
+    private AircraftBehavior ChooseRadarThreatBehavior()
+    {
+        if (HasARMCapability || Role == AircraftRole.SEAD)
+            return AircraftBehavior.SEAD;
+
+        return Role switch
+        {
+            AircraftRole.ECMEscort => AircraftBehavior.ECMStandoff,
+            AircraftRole.Fighter => HardLockDetected ? AircraftBehavior.EscortCover : AircraftBehavior.DefensiveBeam,
+            AircraftRole.Striker => AircraftBehavior.TerrainFollowing,
+            _ => AircraftBehavior.DefensiveBeam
+        };
+    }
+
+    private static bool IsThreatResponseBehavior(AircraftBehavior behavior) => behavior is
+        AircraftBehavior.EvasiveManeuver or
+        AircraftBehavior.DefensiveBeam or
+        AircraftBehavior.ECMStandoff or
+        AircraftBehavior.EscortCover or
+        AircraftBehavior.SEAD or
+        AircraftBehavior.TerrainFollowing;
+
+    private static double NormalizeHeading(double headingDeg) => (headingDeg % 360 + 360) % 360;
 
     // ── Static factory methods ────────────────────────────────────────
 

@@ -1,5 +1,6 @@
 using DEADSKY.Core.Campaign;
 using DEADSKY.Core.Comms;
+using DEADSKY.Core.Simulation;
 
 namespace DEADSKY.Backend.Tests;
 
@@ -97,5 +98,63 @@ public class FriendlySupportDirectorTests
         Assert.True(cap.IsVisibleInPicture);
         Assert.True(cap.AltitudeFt > 10000);
         Assert.True(Math.Abs(cap.BearingDeg - firstBearing) > 0.1 || Math.Abs(cap.RangeNm - firstRange) > 0.1);
+    }
+
+    [Fact]
+    public void UpdateOperationalContext_RaidPressureAndCriticalIncident_ReducesConfidence_AndAutoShowsSupportActors()
+    {
+        var scenario = SimulationTestFactory.CreateOperationScenarioWithObjectives();
+        using var sim = SimulationTestFactory.CreateLoadedSimulation(scenario);
+        SimulationTestFactory.AddDetectedHostileTrack(sim, designation: "SU-24", bearingDeg: 40, rangeNm: 18);
+        SimulationTestFactory.AddDetectedHostileTrack(sim, designation: "MiG-29", bearingDeg: 48, rangeNm: 23);
+        SimulationTestFactory.AddDetectedHostileTrack(sim, designation: "Su-25", bearingDeg: 53, rangeNm: 27);
+        SimulationTestFactory.AddDetectedHostileTrack(sim, designation: "EA-6", bearingDeg: 58, rangeNm: 34);
+        sim.RefreshSnapshot();
+
+        var director = new FriendlySupportDirector(sim.Comms);
+        director.InitializeForScenario(scenario, null);
+        director.UpdateOperationalContext(
+            scenario,
+            sim.LatestSnapshot,
+            new[]
+            {
+                new EngagementIncident("blue_on_blue_warning", "Check fire", IncidentSeverity.Critical, DateTime.UtcNow)
+            });
+
+        var cap = director.Packages.First(package => package.Type == FriendlySupportType.CombatAirPatrol);
+        var awacs = director.Packages.First(package => package.Type == FriendlySupportType.Awacs);
+
+        Assert.True(director.CommandConfidence < 1.0);
+        Assert.True(cap.VisibleUntilSec > 0);
+        Assert.True(awacs.VisibleUntilSec > 0);
+        Assert.Contains("TRUST", director.LiveConsequenceSummary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RequestSupport_HighRiskTaskingCanBeBlocked_WhenConfidenceCollapsed()
+    {
+        var scenario = SimulationTestFactory.CreateOperationScenarioWithObjectives();
+        using var sim = SimulationTestFactory.CreateLoadedSimulation(scenario);
+        SimulationTestFactory.AddDetectedHostileTrack(sim, designation: "SU-24", bearingDeg: 40, rangeNm: 16);
+        SimulationTestFactory.AddDetectedHostileTrack(sim, designation: "MiG-29", bearingDeg: 48, rangeNm: 18);
+        SimulationTestFactory.AddDetectedHostileTrack(sim, designation: "Su-25", bearingDeg: 53, rangeNm: 22);
+        SimulationTestFactory.AddDetectedHostileTrack(sim, designation: "EA-6", bearingDeg: 58, rangeNm: 28);
+        sim.RefreshSnapshot();
+
+        var director = new FriendlySupportDirector(sim.Comms);
+        director.InitializeForScenario(scenario, null);
+        director.UpdateOperationalContext(
+            scenario,
+            sim.LatestSnapshot,
+            new[]
+            {
+                new EngagementIncident("friendly_fire_attempt", "Denied shot on friendly.", IncidentSeverity.Critical, DateTime.UtcNow),
+                new EngagementIncident("blue_on_blue_warning", "Check fire", IncidentSeverity.Critical, DateTime.UtcNow)
+            });
+
+        var result = director.RequestSupport(FriendlySupportType.CombatAirPatrol, "ALPHA ACTUAL", "Need CAP now.", 10);
+
+        Assert.False(result.Accepted);
+        Assert.Contains("fire-discipline", result.Summary, StringComparison.OrdinalIgnoreCase);
     }
 }

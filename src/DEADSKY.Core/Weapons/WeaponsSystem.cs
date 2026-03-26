@@ -248,6 +248,24 @@ public class WeaponsSystem
         return 1;
     }
 
+    public void RecordOperationalIncident(
+        string incidentType,
+        string summary,
+        IncidentSeverity severity,
+        string? trackId = null,
+        string? entityId = null,
+        string? weaponId = null)
+    {
+        RecordIncident(new EngagementIncident(
+            incidentType,
+            summary,
+            severity,
+            DateTime.UtcNow,
+            trackId,
+            entityId,
+            weaponId));
+    }
+
     public double CalculatePk(SAMBattery battery, TrackFile track)
     {
         var weapon = WeaponCatalog.Get(battery.CurrentWeaponId);
@@ -283,15 +301,27 @@ public class WeaponsSystem
     private void UpdateThreatAwareness(SAMBattery? battery, IReadOnlyList<SAMMissile> missiles)
     {
         DateTime now = DateTime.UtcNow;
+        bool radarHot = battery?.RadarOnline == true &&
+                        battery.RadarMode is RadarMode.Search or RadarMode.TrackWhileScan or RadarMode.SingleTargetTrack;
 
-        if (battery?.RadarOnline == true)
+        if (radarHot && battery != null)
         {
             foreach (var hostile in _entities.GetHostileAircraft().OfType<Aircraft>())
             {
                 hostile.RadarLockDetected = true;
                 hostile.RadarLockDetectedTime = now;
                 hostile.RadarLockBearingDeg = hostile.Position.HeadingTo(battery.Position);
+
+                bool hardLock = battery.RadarMode == RadarMode.SingleTargetTrack &&
+                                battery.DesignatedTargetId == hostile.Id;
+                hostile.HardLockDetected = hardLock;
+                hostile.HardLockDetectedTime = hardLock ? now : hostile.HardLockDetectedTime;
             }
+        }
+        else
+        {
+            foreach (var hostile in _entities.GetHostileAircraft().OfType<Aircraft>())
+                hostile.HardLockDetected = false;
         }
 
         foreach (var missile in missiles)
@@ -304,6 +334,42 @@ public class WeaponsSystem
 
             threatenedAircraft.MissileInbound = true;
             threatenedAircraft.MissileInboundDetectedTime = now;
+        }
+
+        CoordinatePackageResponses(battery);
+    }
+
+    private void CoordinatePackageResponses(SAMBattery? battery)
+    {
+        if (battery == null)
+            return;
+
+        var hostiles = _entities.GetHostileAircraft().OfType<Aircraft>().ToList();
+        bool innerRingPressure = hostiles.Any(aircraft => aircraft.Position.Length <= CoordinateSystem.NmToMeters(24));
+        bool radarEmitting = battery.RadarOnline && battery.RadarMode is RadarMode.TrackWhileScan or RadarMode.SingleTargetTrack or RadarMode.Search;
+
+        foreach (var hostile in hostiles)
+        {
+            if (hostile.Role == AircraftRole.SEAD && hostile.HasARMCapability && radarEmitting)
+            {
+                hostile.CurrentBehavior = AircraftBehavior.SEAD;
+                continue;
+            }
+
+            if (hostile.Role == AircraftRole.ECMEscort && (hostile.RadarLockDetected || innerRingPressure))
+            {
+                hostile.CurrentBehavior = AircraftBehavior.ECMStandoff;
+                continue;
+            }
+
+            if (hostile.Role == AircraftRole.Fighter && (hostile.HardLockDetected || innerRingPressure))
+            {
+                hostile.CurrentBehavior = AircraftBehavior.EscortCover;
+                continue;
+            }
+
+            if (hostile.Role == AircraftRole.Striker && hostile.HardLockDetected)
+                hostile.CurrentBehavior = AircraftBehavior.TerrainFollowing;
         }
     }
 
