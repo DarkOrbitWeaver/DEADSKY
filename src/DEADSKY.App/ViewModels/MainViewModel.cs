@@ -1194,10 +1194,19 @@ public partial class MainViewModel : ObservableObject
         SelectedTrackObjectiveText = doctrine.ObjectiveLabel;
         SelectedTrackDoctrineText = doctrine.DoctrineLabel;
         var fireControl = AssessFireControlState(Sim.LatestSnapshot.Battery, SelectedTrack);
-        SelectedTrackStatusText = $"STATUS: {advisory.StateLabel} | {advisory.TagsText}";
+        var threatState = CurrentSnapshot?.TrackThreatStates.FirstOrDefault(state => state.TrackId == SelectedTrack.TrackId);
+        var targetAircraft = SelectedTrack.EntityId == null
+            ? null
+            : CurrentSnapshot?.HostileAircraft.FirstOrDefault(aircraft => aircraft.Id == SelectedTrack.EntityId);
+        string countermeasureState = targetAircraft == null
+            ? "CM CLEAN"
+            : targetAircraft.IsChaffActive || targetAircraft.IsFlareActive || targetAircraft.ECMActive
+                ? $"CM ACTIVE {(targetAircraft.IsChaffActive ? "CHAFF " : string.Empty)}{(targetAircraft.IsFlareActive ? "FLARE " : string.Empty)}{(targetAircraft.ECMActive ? "ECM" : string.Empty)}".Trim()
+                : "CM CLEAN";
+        SelectedTrackStatusText = $"STATUS: {advisory.StateLabel} | {advisory.TagsText} | {(threatState?.Summary ?? "SEARCH PICTURE")}";
         SelectedTrackMissionText = $"MISSION: {TrimPrefix(doctrine.PackageLabel)} | {TrimPrefix(doctrine.RoleLabel)} | {TrimPrefix(doctrine.ObjectiveLabel)}";
-        SelectedTrackControlText = $"CONTROL: {BuildTrackRetentionLabel(SelectedTrack)} | {fireControl.FireStatusText} | {TrimPrefix(advisory.TimeToThreatText, "TIME TO THREAT: ")}";
-        SelectedTrackKinematicsText = $"KINEMATICS: ALT {SelectedTrack.AltitudeFt / 1000:0.0}KFT | SPD {SelectedTrack.SpeedKts:0}KT | UNC {SelectedTrack.PositionUncertaintyM / 1000:0.0}KM";
+        SelectedTrackControlText = $"CONTROL: {BuildTrackRetentionLabel(SelectedTrack)} | {fireControl.FireStatusText} | {countermeasureState} | {AbortAvailabilityText.Replace("ABORT: ", string.Empty)}";
+        SelectedTrackKinematicsText = $"KINEMATICS: ALT {SelectedTrack.AltitudeFt / 1000:0.0}KFT | SPD {SelectedTrack.SpeedKts:0}KT | UNC {SelectedTrack.PositionUncertaintyM / 1000:0.0}KM | {(CurrentSnapshot?.SelectedWeapon?.ShortCode ?? "9M38")}";
         SelectedTrackTimeToThreatText = advisory.TimeToThreatText;
         SelectedTrackEnvelopeText = $"FIRE CONTROL: {fireControl.FireStatusText} | {fireControl.LockStatusText} | {fireControl.RangeStatusText}";
     }
@@ -1589,6 +1598,14 @@ public partial class MainViewModel : ObservableObject
             return;
 
         string normalized = content.ToLowerInvariant();
+        bool cautionTraffic = normalized.Contains("friendly", StringComparison.Ordinal) ||
+                              normalized.Contains("civilian", StringComparison.Ordinal) ||
+                              normalized.Contains("hold fire", StringComparison.Ordinal) ||
+                              normalized.Contains("cease fire", StringComparison.Ordinal);
+        bool rescueTraffic = normalized.Contains("mayday", StringComparison.Ordinal) ||
+                             normalized.Contains("rescue", StringComparison.Ordinal) ||
+                             normalized.Contains("downed", StringComparison.Ordinal) ||
+                             normalized.Contains("angel", StringComparison.Ordinal);
         string? supportType = normalized switch
         {
             _ when normalized.Contains("declare", StringComparison.Ordinal) => "declare",
@@ -1601,8 +1618,29 @@ public partial class MainViewModel : ObservableObject
             _ => null
         };
 
+        if (rescueTraffic)
+            supportType ??= "sar";
+
         if (supportType != null)
             IssueSupportRequest(supportType);
+
+        if (cautionTraffic)
+        {
+            if (SelectedTrack != null &&
+                SelectedTrack.Classification is TrackClassification.Friendly or TrackClassification.Civilian)
+            {
+                Sim.PlayerReleaseTrack(SelectedTrack.TrackId);
+                RefreshFromSimulationSnapshot();
+            }
+
+            if (Sim.LatestSnapshot.Battery?.ROE == RulesOfEngagement.WeaponsFree)
+                Sim.SetROE(RulesOfEngagement.WeaponsTight, "ECHO ACTUAL SAFETY CHECK");
+
+            Sim.Comms.Queue(CommManager.CreateAlliedHQMessage(
+                "ALPHA, ECHO. CHECK FIRE ACKNOWLEDGED. MAINTAIN POSITIVE ID AND REPORT ANY FRIENDLY CONFLICT.",
+                MessagePriority.Immediate));
+            FlushPendingRadioTraffic();
+        }
     }
 
 }

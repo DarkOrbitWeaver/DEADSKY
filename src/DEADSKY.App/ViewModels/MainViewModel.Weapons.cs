@@ -38,6 +38,7 @@ public partial class MainViewModel
     public string SelectedWeaponDescriptionText => CurrentSnapshot?.SelectedWeapon?.Description ?? "Baseline medium-range radar-guided missile.";
     public string OperationalPictureText => $"WORLD: {CurrentOperationalPicture.ThreatSummary} {CurrentOperationalPicture.SupportSummary}";
     public string RecentIncidentSummaryText => CurrentOperationalPicture.ConsequenceSummary;
+    public IReadOnlyList<FriendlyForceState> VisibleFriendlyForces => CurrentOperationalPicture.FriendlyForces;
     public string VisibleFriendlyForceText => CurrentOperationalPicture.FriendlyForces.Count == 0
         ? "FRIENDLIES: NO ACTIVE SUPPORT TRACKS"
         : "FRIENDLIES: " + string.Join(" | ", CurrentOperationalPicture.FriendlyForces
@@ -119,6 +120,7 @@ public partial class MainViewModel
         OnPropertyChanged(nameof(SelectedWeaponDescriptionText));
         OnPropertyChanged(nameof(OperationalPictureText));
         OnPropertyChanged(nameof(RecentIncidentSummaryText));
+        OnPropertyChanged(nameof(VisibleFriendlyForces));
         OnPropertyChanged(nameof(VisibleFriendlyForceText));
         OnPropertyChanged(nameof(AbortAvailabilityText));
     }

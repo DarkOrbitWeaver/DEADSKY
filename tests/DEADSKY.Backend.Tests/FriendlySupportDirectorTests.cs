@@ -78,4 +78,24 @@ public class FriendlySupportDirectorTests
         Assert.Equal(SupportAvailabilityState.CoolingDown, jammer.Availability);
         Assert.True(jammer.IsVisibleInPicture);
     }
+
+    [Fact]
+    public void Tick_VisibleSupport_UpdatesTacticalPosition()
+    {
+        var comms = new CommManager();
+        var director = new FriendlySupportDirector(comms);
+        director.InitializeForScenario(SimulationTestFactory.CreateOperationScenarioWithObjectives(), null);
+
+        director.RequestSupport(FriendlySupportType.CombatAirPatrol, "ALPHA ACTUAL", "Need CAP.", 0);
+        director.Tick(70, 70);
+        var cap = director.Packages.First(package => package.Type == FriendlySupportType.CombatAirPatrol);
+        double firstBearing = cap.BearingDeg;
+        double firstRange = cap.RangeNm;
+
+        director.Tick(15, 85);
+
+        Assert.True(cap.IsVisibleInPicture);
+        Assert.True(cap.AltitudeFt > 10000);
+        Assert.True(Math.Abs(cap.BearingDeg - firstBearing) > 0.1 || Math.Abs(cap.RangeNm - firstRange) > 0.1);
+    }
 }

@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -59,6 +61,13 @@ public class TacticalMapDisplay : FrameworkElement
             typeof(TacticalMapDisplay),
             new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsRender));
 
+    public static readonly DependencyProperty FriendlyForcesProperty =
+        DependencyProperty.Register(
+            nameof(FriendlyForces),
+            typeof(IEnumerable<FriendlyForceState>),
+            typeof(TacticalMapDisplay),
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
     private double _mapRangeNm = 180;
 
     public SimulationSnapshot? Snapshot
@@ -77,6 +86,12 @@ public class TacticalMapDisplay : FrameworkElement
     {
         get => (bool)GetValue(ShowLabelsProperty);
         set => SetValue(ShowLabelsProperty, value);
+    }
+
+    public IEnumerable<FriendlyForceState>? FriendlyForces
+    {
+        get => (IEnumerable<FriendlyForceState>?)GetValue(FriendlyForcesProperty);
+        set => SetValue(FriendlyForcesProperty, value);
     }
 
     public double MapRangeNm => _mapRangeNm;
@@ -184,6 +199,15 @@ public class TacticalMapDisplay : FrameworkElement
                 DrawLabel(dc, $"{track.RangeNm:0.0}nm / FL{track.AltitudeFt / 100:0}", new Point(point.X + 8, point.Y + 10), Brushes.Gainsboro, 9, FontWeights.Normal);
             }
         }
+
+        if (FriendlyForces == null)
+            return;
+
+        foreach (var force in FriendlyForces.Where(force => force.VisibleInPicture))
+        {
+            var point = GetMapPoint(rect, force.Position, _mapRangeNm);
+            DrawFriendlySupport(dc, point, force);
+        }
     }
 
     private void DrawMissiles(DrawingContext dc, Rect rect, SimulationSnapshot snapshot)
@@ -237,6 +261,14 @@ public class TacticalMapDisplay : FrameworkElement
             dc.DrawEllipse(null, SelectedTrackPen, point, 10, 10);
         else if (held)
             dc.DrawEllipse(null, HeldTrackPen, point, 8, 8);
+    }
+
+    private static void DrawFriendlySupport(DrawingContext dc, Point point, FriendlyForceState force)
+    {
+        dc.DrawEllipse(FriendlyTrackBrush, OutlinePen, point, 5.2, 5.2);
+        dc.DrawLine(HeldTrackPen, new Point(point.X - 8, point.Y), new Point(point.X + 8, point.Y));
+        dc.DrawLine(HeldTrackPen, new Point(point.X, point.Y - 8), new Point(point.X, point.Y + 8));
+        DrawLabel(dc, $"{force.Callsign} {force.Role.ToUpperInvariant()}", new Point(point.X + 9, point.Y - 4), FriendlyTrackBrush, 9, FontWeights.SemiBold);
     }
 
     private static Point GetMapPoint(Rect rect, Vec2 position, double mapRangeNm)

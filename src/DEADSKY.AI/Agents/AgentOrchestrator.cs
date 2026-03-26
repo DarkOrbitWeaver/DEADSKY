@@ -290,38 +290,21 @@ public class AlliedHQAgent : AgentBase
     /// <summary>Called when player sends a message on Command Net</summary>
     public async Task RespondToPlayerMessage(string playerMessage, SimulationSnapshot snapshot)
     {
-        if (IsRunning) return;
-        IsRunning = true;
-        LastRunTime = DateTime.UtcNow;
+        var response = await RunAsync(
+            snapshot,
+            $"Player transmission: \"{playerMessage}\". Respond as ECHO ACTUAL with one short radio transmission grounded in the live picture. Use tools first if needed.",
+            toolSubset: GetDirectReplyTools(),
+            finalReplyRequired: true,
+            resetHistory: true,
+            planningMaxTokens: 72,
+            followUpMaxTokens: 56);
+        response = NormalizeRadioReply(response, maxWords: 18);
+        if (string.IsNullOrWhiteSpace(response))
+            return;
 
-        try
-        {
-            string prompt = $@"Player transmission: ""{playerMessage}""
-Time: {snapshot.GameTimeString}
-Alert: {snapshot.Battery?.AlertLevel}
-ROE: {snapshot.Battery?.ROE}
-Hostile tracks: {snapshot.HostileTracks.Count}
-Missiles in flight: {snapshot.ActiveMissiles.Count}
-
-Reply as ECHO ACTUAL with one short radio transmission.";
-            var response = await _client.GetTextAsync(
-                BuildPlayerReplyPrompt(),
-                prompt,
-                temperature: 0.25,
-                maxTokens: 56);
-
-            response = NormalizeRadioReply(response, maxWords: 18);
-            if (string.IsNullOrWhiteSpace(response))
-                return;
-
-            _tools.Simulation.Comms.Queue(CommManager.CreateAlliedHQMessage(
-                response,
-                MessagePriority.Priority));
-        }
-        finally
-        {
-            IsRunning = false;
-        }
+        _tools.Simulation.Comms.Queue(CommManager.CreateAlliedHQMessage(
+            response,
+            MessagePriority.Priority));
     }
 
     protected override string BuildSystemPrompt(SimulationSnapshot snapshot)
@@ -383,6 +366,15 @@ Rules:
         "get_support_status",
         "get_battery_status",
         "get_engagement_history"
+    ]);
+
+    private IReadOnlyList<ToolDefinition> GetDirectReplyTools() => _tools.GetToolsByName(
+    [
+        "get_shared_operational_picture",
+        "get_recent_incidents",
+        "get_support_status",
+        "get_battery_status",
+        "get_threat_assessment"
     ]);
 
     private async Task SendPeriodicSitrepAsync(SimulationSnapshot snapshot)
@@ -450,38 +442,19 @@ public class IntelligenceAgent : AgentBase
 
     public async Task RespondToPlayerQuery(string playerMessage, SimulationSnapshot snapshot)
     {
-        if (IsRunning) return;
-        IsRunning = true;
-        LastRunTime = DateTime.UtcNow;
+        var response = await RunAsync(
+            snapshot,
+            $"Player transmission: \"{playerMessage}\". Respond as INTEL-1 with one concise assessment or warning grounded in the live tracks. Use tools first if needed.",
+            toolSubset: GetDirectIntelTools(),
+            finalReplyRequired: true,
+            resetHistory: true,
+            planningMaxTokens: 72,
+            followUpMaxTokens: 56);
+        response = NormalizeRadioReply(response, maxWords: 20);
+        if (string.IsNullOrWhiteSpace(response))
+            return;
 
-        try
-        {
-            string primary = snapshot.HostileTracks
-                .OrderByDescending(track => track.ThreatLevel)
-                .Select(track => $"{track.TrackId} {track.RangeNm:0.0}NM {track.AltitudeFt / 1000:0.0}kft")
-                .FirstOrDefault() ?? "none";
-            string prompt = $@"Player transmission: ""{playerMessage}""
-Time: {snapshot.GameTimeString}
-Hostile tracks: {snapshot.HostileTracks.Count}
-Primary track: {primary}
-
-Reply as INTEL-1 with one concise assessment or warning.";
-            var response = await _client.GetTextAsync(
-                BuildDirectIntelPrompt(),
-                prompt,
-                temperature: 0.2,
-                maxTokens: 56);
-
-            response = NormalizeRadioReply(response, maxWords: 20);
-            if (string.IsNullOrWhiteSpace(response))
-                return;
-
-            _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response));
-        }
-        finally
-        {
-            IsRunning = false;
-        }
+        _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response));
     }
 
     protected override string BuildSystemPrompt(SimulationSnapshot snapshot) =>
@@ -502,6 +475,15 @@ If a separate final reply is requested, do not call send_radio_message; that tra
         "get_shared_operational_picture",
         "get_recent_incidents",
         "get_engagement_history"
+    ]);
+
+    private IReadOnlyList<ToolDefinition> GetDirectIntelTools() => _tools.GetToolsByName(
+    [
+        "get_radar_contacts",
+        "get_contact_details",
+        "get_threat_assessment",
+        "get_shared_operational_picture",
+        "get_recent_incidents"
     ]);
 
     private static string BuildDirectIntelPrompt() =>

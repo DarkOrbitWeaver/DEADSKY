@@ -39,6 +39,7 @@
                                              Grid.Row="1"
                                              Margin="8"
                                              Snapshot="{Binding CurrentSnapshot}"
+                                             FriendlyForces="{Binding VisibleFriendlyForces}"
                                              SelectedTrackId="{Binding SelectedTrackId}"
                                              ShowLabels="{Binding ShowTacticalMapLabels}"/>
             </Grid>

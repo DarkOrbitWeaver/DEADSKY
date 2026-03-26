@@ -1,5 +1,6 @@
 using DEADSKY.Core.Campaign;
 using DEADSKY.Core.Entities;
+using DEADSKY.Core.Physics;
 using DEADSKY.Core.Radar;
 using DEADSKY.Core.Weapons;
 
@@ -35,7 +36,9 @@ public sealed record FriendlyForceState(
     string Role,
     string Status,
     bool VisibleInPicture,
-    string Summary);
+    string Summary,
+    Vec2 Position,
+    double AltitudeFt);
 
 public sealed record EngagementIncident(
     string IncidentType,
@@ -120,7 +123,9 @@ public static class OperationalPictureBuilder
                 package.Type.ToString(),
                 package.Availability.ToString(),
                 package.IsVisibleInPicture,
-                package.LastSummary))
+                package.LastSummary,
+                package.Position,
+                package.AltitudeFt))
             .ToList();
     }
 

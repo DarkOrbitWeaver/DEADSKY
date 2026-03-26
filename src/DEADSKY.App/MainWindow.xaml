@@ -99,6 +99,7 @@
                             <controls:RadarDisplay x:Name="RadarScope"
                                                    Margin="8"
                                                    Snapshot="{Binding CurrentSnapshot}"
+                                                   FriendlyForces="{Binding VisibleFriendlyForces}"
                                                    ShowAltitudeLabels="{Binding ShowRadarAltitudeLabels}"
                                                    ShowTrackTrails="{Binding ShowRadarTrackTrails}"
                                                    SelectedTrackId="{Binding SelectedTrackId, Mode=TwoWay}"/>

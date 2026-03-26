@@ -477,6 +477,7 @@ public partial class SupportPackageViewModel : ObservableObject
     [ObservableProperty] private string _detailText = "";
     [ObservableProperty] private string _pictureLabel = "";
     [ObservableProperty] private bool _isVisibleInPicture;
+    [ObservableProperty] private string _positionText = "";
 
     public SupportPackageViewModel(FriendlySupportPackage package)
     {
@@ -491,8 +492,9 @@ public partial class SupportPackageViewModel : ObservableObject
         StatusText = package.Availability.ToString().ToUpperInvariant();
         DetailText = package.LastSummary;
         IsVisibleInPicture = package.IsVisibleInPicture;
+        PositionText = $"BRAA {package.BearingDeg:000}/{package.RangeNm:0.0} ALT {package.AltitudeFt / 1000:0.0}K";
         PictureLabel = package.IsVisibleInPicture
-            ? $"{package.UnitCallsign} ACTIVE"
+            ? $"{package.UnitCallsign} {PositionText}"
             : $"{package.UnitCallsign} STANDBY";
     }
 }

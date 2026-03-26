@@ -1,5 +1,6 @@
 using DEADSKY.Core.Comms;
 using DEADSKY.Core.Entities;
+using DEADSKY.Core.Physics;
 using DEADSKY.Core.Scenario;
 
 namespace DEADSKY.Core.Campaign;
@@ -40,6 +41,10 @@ public sealed class FriendlySupportPackage
     public double CooldownRemainingSec { get; set; }
     public double VisibleUntilSec { get; set; }
     public string LastSummary { get; set; } = "Standing by.";
+    public double BearingDeg { get; set; }
+    public double RangeNm { get; set; }
+    public double AltitudeFt { get; set; }
+    public Vec2 Position => CoordinateSystem.FromBearingRange(BearingDeg, RangeNm);
 
     public bool IsVisibleInPicture => VisibleUntilSec > 0;
     public string StatusLine => $"{DisplayName} // {UnitCallsign} | {Availability.ToString().ToUpper()} | REL {Reliability:P0} | {LastSummary}";
@@ -120,6 +125,9 @@ public sealed class FriendlySupportDirector
             Designation = "DIVERTED CAP",
             Reliability = 0.76,
             Risk = 0.48,
+            BearingDeg = 285,
+            RangeNm = 68,
+            AltitudeFt = 26000,
             LastSummary = "Cold on station west of sector. Available for diversion."
         });
 
@@ -133,6 +141,9 @@ public sealed class FriendlySupportDirector
             Designation = "STANDOFF JAMMER CELL",
             Reliability = 0.71,
             Risk = 0.37,
+            BearingDeg = 330,
+            RangeNm = 82,
+            AltitudeFt = 28000,
             LastSummary = "Standoff jamming orbit available on command tasking."
         });
 
@@ -146,6 +157,9 @@ public sealed class FriendlySupportDirector
             Designation = "AIRBORNE EARLY WARNING",
             Reliability = 0.83,
             Risk = 0.22,
+            BearingDeg = 018,
+            RangeNm = 118,
+            AltitudeFt = 32000,
             LastSummary = "Wide-area picture coverage available."
         });
 
@@ -159,6 +173,9 @@ public sealed class FriendlySupportDirector
             Designation = "ADJACENT SAM BATTERY",
             Reliability = 0.8,
             Risk = 0.31,
+            BearingDeg = 142,
+            RangeNm = 38,
+            AltitudeFt = 0,
             LastSummary = "Cross-battery fires available on priority call."
         });
 
@@ -186,6 +203,9 @@ public sealed class FriendlySupportDirector
             Reliability = 0.68,
             Risk = 0.52,
             Availability = scenario == null ? SupportAvailabilityState.Unavailable : SupportAvailabilityState.Ready,
+            BearingDeg = 204,
+            RangeNm = 74,
+            AltitudeFt = 14000,
             LastSummary = "Standing by for downed-friendly contingencies."
         });
     }
@@ -231,7 +251,10 @@ public sealed class FriendlySupportDirector
             }
 
             if (package.VisibleUntilSec > 0)
+            {
                 package.VisibleUntilSec = Math.Max(0, package.VisibleUntilSec - deltaTime);
+                UpdateVisiblePosition(package, gameTimeSec);
+            }
         }
 
         _pendingRequests.RemoveAll(request => gameTimeSec - request.RequestedAtSec > 900);
@@ -387,4 +410,39 @@ public sealed class FriendlySupportDirector
         FriendlySupportType.Awacs => $"{unitCallsign}, fused picture degraded. Relay quality unstable.",
         _ => $"{unitCallsign}, support action degraded in execution."
     };
+
+    private static void UpdateVisiblePosition(FriendlySupportPackage package, double gameTimeSec)
+    {
+        double orbitPhase = gameTimeSec / 18.0;
+        switch (package.Type)
+        {
+            case FriendlySupportType.CombatAirPatrol:
+                package.BearingDeg = NormalizeBearing(285 + Math.Sin(orbitPhase) * 24);
+                package.RangeNm = 64 + Math.Cos(orbitPhase) * 6;
+                package.AltitudeFt = 25000 + Math.Sin(orbitPhase * 0.8) * 1800;
+                break;
+            case FriendlySupportType.JammingSupport:
+                package.BearingDeg = NormalizeBearing(330 + Math.Sin(orbitPhase * 0.7) * 10);
+                package.RangeNm = 78 + Math.Cos(orbitPhase * 0.7) * 4;
+                package.AltitudeFt = 28500 + Math.Sin(orbitPhase * 0.5) * 1200;
+                break;
+            case FriendlySupportType.Awacs:
+                package.BearingDeg = NormalizeBearing(18 + Math.Sin(orbitPhase * 0.35) * 8);
+                package.RangeNm = 116 + Math.Cos(orbitPhase * 0.35) * 3;
+                package.AltitudeFt = 32000 + Math.Sin(orbitPhase * 0.25) * 900;
+                break;
+            case FriendlySupportType.NearbyBattery:
+                package.BearingDeg = 142;
+                package.RangeNm = 38;
+                package.AltitudeFt = 0;
+                break;
+            case FriendlySupportType.SearchAndRescue:
+                package.BearingDeg = NormalizeBearing(204 + Math.Sin(orbitPhase * 0.9) * 14);
+                package.RangeNm = 70 + Math.Cos(orbitPhase * 0.9) * 5;
+                package.AltitudeFt = 14500 + Math.Sin(orbitPhase * 0.7) * 800;
+                break;
+        }
+    }
+
+    private static double NormalizeBearing(double value) => (value % 360 + 360) % 360;
 }

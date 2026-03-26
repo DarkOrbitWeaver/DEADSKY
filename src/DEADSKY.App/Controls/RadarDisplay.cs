@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using SkiaSharp;
 using SkiaSharp.Views.Desktop;
 using SkiaSharp.Views.WPF;
@@ -56,6 +58,16 @@ public class RadarDisplay : SKElement
     {
         get => (bool)GetValue(ShowTrackTrailsProperty);
         set => SetValue(ShowTrackTrailsProperty, value);
+    }
+
+    public static readonly DependencyProperty FriendlyForcesProperty =
+        DependencyProperty.Register(nameof(FriendlyForces), typeof(IEnumerable<FriendlyForceState>),
+            typeof(RadarDisplay), new PropertyMetadata(null));
+
+    public IEnumerable<FriendlyForceState>? FriendlyForces
+    {
+        get => (IEnumerable<FriendlyForceState>?)GetValue(FriendlyForcesProperty);
+        set => SetValue(FriendlyForcesProperty, value);
     }
 
     // Events
@@ -155,6 +167,7 @@ public class RadarDisplay : SKElement
         DrawEcmEffects(canvas);
         DrawPhosphorTrails(canvas);
         DrawContacts(canvas);
+        DrawFriendlySupport(canvas);
         DrawMissiles(canvas);
         DrawSweepLine(canvas);
 
@@ -722,6 +735,33 @@ public class RadarDisplay : SKElement
             }
 
             rd.InvalidateVisual();
+        }
+    }
+
+    private void DrawFriendlySupport(SKCanvas canvas)
+    {
+        if (_snapshot == null || FriendlyForces == null)
+            return;
+
+        double rangeNm = _snapshot.RadarRangeNm;
+        using var supportPaint = new SKPaint
+        {
+            Color = new SKColor(90, 200, 255),
+            IsStroke = true,
+            StrokeWidth = 1.6f,
+            IsAntialias = true
+        };
+
+        foreach (var force in FriendlyForces.Where(force => force.VisibleInPicture))
+        {
+            var (px, py) = CoordinateSystem.ToRadarScreen(force.Position, rangeNm, _displayRadius);
+            float cx = _center.X + px;
+            float cy = _center.Y + py;
+            canvas.DrawCircle(cx, cy, 5.5f, supportPaint);
+            canvas.DrawLine(cx - 7, cy, cx + 7, cy, supportPaint);
+            canvas.DrawLine(cx, cy - 7, cx, cy + 7, supportPaint);
+            _trackLabelPaint.Color = new SKColor(90, 200, 255, 220);
+            canvas.DrawText(force.Callsign, cx + 8, cy - 3, _trackLabelPaint);
         }
     }
 }
