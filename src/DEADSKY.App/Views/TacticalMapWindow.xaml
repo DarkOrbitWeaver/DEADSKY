@@ -6,13 +6,11 @@
         Height="720"
         Width="1120"
         Background="{StaticResource ConsoleBgBrush}"
-        UseLayoutRounding="True"
-        SnapsToDevicePixels="True"
         WindowStartupLocation="CenterOwner">
     <Grid Margin="10">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="3.55*"/>
-            <ColumnDefinition Width="0.95*"/>
+            <ColumnDefinition Width="3.2*"/>
+            <ColumnDefinition Width="1.2*"/>
         </Grid.ColumnDefinitions>
 
         <Border Grid.Column="0" Style="{StaticResource MilPanel}" Margin="0,0,10,0">
@@ -22,55 +20,78 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
                 <Border Grid.Row="0" Style="{StaticResource PanelHeaderStyle}">
-                    <DockPanel>
+                    <DockPanel LastChildFill="False">
                         <TextBlock Text="TACTICAL MAP // KOVRAN LOWLANDS" Style="{StaticResource HeaderText}"/>
-                        <TextBlock Text="{Binding GameTime}" Style="{StaticResource SmallText}" HorizontalAlignment="Right"/>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <TextBlock x:Name="MapZoomText"
+                                       Text="MAP 180NM"
+                                       Style="{StaticResource SmallText}"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,10,0"/>
+                            <Button Content="-" Style="{StaticResource MilButton}" Click="OnZoomOut" />
+                            <Button Content="RESET" Style="{StaticResource MilButton}" Click="OnResetZoom" Margin="6,0,0,0"/>
+                            <Button Content="+" Style="{StaticResource MilButton}" Click="OnZoomIn" Margin="6,0,0,0"/>
+                            <TextBlock Text="{Binding GameTime}" Style="{StaticResource SmallText}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                        </StackPanel>
                     </DockPanel>
                 </Border>
                 <controls:TacticalMapDisplay x:Name="MapDisplay"
                                              Grid.Row="1"
                                              Margin="8"
                                              Snapshot="{Binding CurrentSnapshot}"
-                                             Scenario="{Binding CurrentScenarioDefinition}"
-                                             SelectedTrackId="{Binding SelectedTrackId}"/>
+                                             SelectedTrackId="{Binding SelectedTrackId}"
+                                             ShowLabels="{Binding ShowTacticalMapLabels}"/>
             </Grid>
         </Border>
 
         <Grid Grid.Column="1">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
             <Border Grid.Row="0" Style="{StaticResource MilPanel}" Padding="10" Margin="0,0,0,10">
                 <StackPanel>
-                    <TextBlock Text="MAP STATUS" Style="{StaticResource HeaderText}"/>
-                    <WrapPanel Margin="0,8,0,0">
-                        <Border Style="{StaticResource StatusBadge}">
-                            <TextBlock Text="{Binding ThreatSummaryText}" Style="{StaticResource StatusBadgeText}"/>
-                        </Border>
-                        <Border Style="{StaticResource StatusBadge}">
-                            <TextBlock Text="{Binding FireControlStatusText}" Style="{StaticResource StatusBadgeText}"/>
-                        </Border>
-                        <Border Style="{StaticResource StatusBadge}">
-                            <TextBlock Text="{Binding MissileFlightStatusText}" Style="{StaticResource StatusBadgeText}"/>
-                        </Border>
-                    </WrapPanel>
-                    <TextBlock Text="WHEEL ZOOM | RMB DRAG | MMB RESET | CLICK TRACK TO SYNC SELECTION"
-                               Style="{StaticResource SubtleText}"
-                               TextWrapping="Wrap"
-                               Margin="0,8,0,0"/>
+                    <TextBlock Text="SECTOR NOTES" Style="{StaticResource HeaderText}"/>
+                    <TextBlock Text="{Binding MissionName}" Style="{StaticResource PrimaryText}" Margin="0,6,0,0"/>
+                    <TextBlock Text="{Binding ThreatSummaryText}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding WeatherSummary}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
+                    <TextBlock Text="Lore: Sable Ridge masks low flyers, Vanta River channels ingress lanes, and the Kovran Depot is the strike package objective." Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
                 </StackPanel>
             </Border>
 
-            <Border Grid.Row="1" Style="{StaticResource MilPanel}" Padding="10">
+            <Border Grid.Row="1" Style="{StaticResource MilPanel}" Padding="10" Margin="0,0,0,10">
                 <StackPanel>
                     <TextBlock Text="SELECTED TRACK" Style="{StaticResource HeaderText}"/>
-                    <TextBlock Text="{Binding SelectedTrackId, StringFormat=TRACK {0}}" Style="{StaticResource PrimaryText}" Margin="0,8,0,0"/>
-                    <TextBlock Text="{Binding SelectedTrackBraa}" Style="{StaticResource SmallText}" Margin="0,4,0,0"/>
-                    <TextBlock Text="{Binding SelectedTrackThreatText}" Style="{StaticResource WarningText}" Margin="0,4,0,0"/>
-                    <TextBlock Text="{Binding SelectedTrackEnvelopeText}" Style="{StaticResource AccentText}" Margin="0,6,0,0"/>
-                    <TextBlock Text="{Binding SelectedTrackStatusText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    <TextBlock Text="{Binding SelectedTrackId, StringFormat=TRACK: {0}}" Style="{StaticResource PrimaryText}" Margin="0,6,0,0"/>
+                    <TextBlock Text="{Binding SelectedTrackBraa}" Style="{StaticResource SmallText}" />
+                    <TextBlock Text="{Binding SelectedTrackThreatText}" Style="{StaticResource SmallText}" />
+                    <TextBlock Text="{Binding SelectedTrackEnvelopeText}" Style="{StaticResource SmallText}" />
+                    <TextBlock Text="{Binding SelectedTrackKinematicsText}" Style="{StaticResource AccentText}" Margin="0,4,0,0"/>
+                    <TextBlock Text="{Binding RadarCursorReadout}" Style="{StaticResource SmallText}" Margin="0,8,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2" Style="{StaticResource MilPanel}" Padding="10">
+                <StackPanel>
+                    <TextBlock Text="TOP THREATS" Style="{StaticResource HeaderText}" />
+                    <ItemsControl ItemsSource="{Binding ThreatBoardTracks}" Margin="0,8,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,1">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="70"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="58"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding TrackId}" Style="{StaticResource SmallText}" Foreground="{Binding RowBrush}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Designation}" Style="{StaticResource SmallText}" Foreground="{Binding RowBrush}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding RangeText}" Style="{StaticResource SmallText}" Foreground="{Binding RowBrush}" HorizontalAlignment="Right"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </StackPanel>
             </Border>
         </Grid>

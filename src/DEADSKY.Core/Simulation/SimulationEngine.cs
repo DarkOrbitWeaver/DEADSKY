@@ -115,6 +115,59 @@ public sealed class SimulationEngine : IDisposable
         return ok;
     }
 
+    public bool PlayerToggleTrackHold(string trackId)
+    {
+        var battery = Entities.GetPlayerBattery();
+        var track = Radar.TrackManager.GetById(trackId);
+        if (track == null)
+            return false;
+
+        bool newHeldState = !track.IsTrackHeld || track.IsDesignated;
+        if (!Radar.TrackManager.HoldTrack(trackId, newHeldState))
+            return false;
+
+        if (newHeldState && battery != null && battery.RadarMode == RadarMode.Search)
+        {
+            battery.RadarMode = RadarMode.TrackWhileScan;
+            battery.RadarOnline = true;
+            Radar.SetMode(RadarMode.TrackWhileScan);
+        }
+
+        BuildSnapshot();
+        return true;
+    }
+
+    public bool PlayerReleaseTrack(string trackId)
+    {
+        var battery = Entities.GetPlayerBattery();
+        var track = Radar.TrackManager.GetById(trackId);
+        if (track == null)
+            return false;
+
+        bool wasHardLock = track.IsDesignated ||
+            (!string.IsNullOrWhiteSpace(track.EntityId) && battery?.DesignatedTargetId == track.EntityId);
+
+        if (!Radar.TrackManager.ReleaseTrack(trackId))
+            return false;
+
+        if (battery != null && !string.IsNullOrWhiteSpace(track.EntityId) && battery.DesignatedTargetId == track.EntityId)
+            battery.DesignatedTargetId = null;
+
+        if (battery != null && wasHardLock && battery.RadarMode == RadarMode.SingleTargetTrack)
+        {
+            battery.RadarMode = RadarMode.TrackWhileScan;
+            battery.RadarOnline = true;
+            Radar.SetMode(RadarMode.TrackWhileScan);
+        }
+        else if (battery != null)
+        {
+            Radar.SetMode(battery.RadarMode, battery.DesignatedTargetId);
+        }
+
+        BuildSnapshot();
+        return true;
+    }
+
     public bool PlayerFire(string trackId)
     {
         var battery = Entities.GetPlayerBattery();
@@ -141,9 +194,22 @@ public sealed class SimulationEngine : IDisposable
         if (battery == null)
             return;
 
+        if (mode != RadarMode.SingleTargetTrack && !string.IsNullOrWhiteSpace(battery.DesignatedTargetId))
+        {
+            var hardLockTrack = Radar.TrackManager.GetByEntityId(battery.DesignatedTargetId);
+            if (hardLockTrack != null)
+            {
+                hardLockTrack.IsDesignated = false;
+                if (mode == RadarMode.TrackWhileScan)
+                    hardLockTrack.IsTrackHeld = true;
+            }
+
+            battery.DesignatedTargetId = null;
+        }
+
         battery.RadarMode = mode;
         battery.RadarOnline = mode is not RadarMode.Silent and not RadarMode.Standby;
-        Radar.SetMode(mode);
+        Radar.SetMode(mode, battery.DesignatedTargetId);
         BuildSnapshot();
     }
 
@@ -281,22 +347,232 @@ public sealed class SimulationEngine : IDisposable
     private void BuildSnapshot()
     {
         var battery = Entities.GetPlayerBattery();
+        var trackSnapshot = Radar.TrackManager.GetAllTracks()
+            .Select(CloneTrack)
+            .ToList();
+
         LatestSnapshot = new SimulationSnapshot
         {
             GameTimeSec = GameTimeSec,
             GameTimeString = TimeSpan.FromSeconds(GameTimeSec).ToString(@"hh\:mm\:ss") + " ZULU",
-            Battery = battery,
-            AllTracks = Radar.TrackManager.GetAllTracks().ToList(),
-            FirmTracks = Radar.TrackManager.GetFirmTracks().ToList(),
-            HostileTracks = Radar.TrackManager.GetHostileTracks().ToList(),
-            HostileAircraft = Entities.GetHostileAircraft().OfType<Aircraft>().ToList(),
-            ActiveMissiles = Entities.GetActiveMissiles().ToList(),
+            Battery = battery == null ? null : CloneBattery(battery),
+            AllTracks = trackSnapshot,
+            FirmTracks = trackSnapshot.Where(track => track.Quality != TrackQuality.Lost).ToList(),
+            HostileTracks = trackSnapshot.Where(track =>
+                track.Classification is TrackClassification.Hostile or TrackClassification.AssumedHostile).ToList(),
+            HostileAircraft = Entities.GetHostileAircraft().OfType<Aircraft>().Select(CloneAircraft).ToList(),
+            ActiveMissiles = Entities.GetActiveMissiles().Select(CloneMissile).ToList(),
             ActiveEcmEffects = Radar.ActiveEcmEffects.ToList(),
             RadarSweepAngle = Radar.SweepAngleDeg,
             RadarRangeNm = battery?.RadarRangeNm ?? Radar.Model.MaxRangeNm,
             RadarMode = battery?.RadarMode ?? RadarMode.Search,
             Weather = Weather.Clone()
         };
+    }
+
+    private static SAMBattery CloneBattery(SAMBattery battery)
+    {
+        var clone = new SAMBattery
+        {
+            Callsign = battery.Callsign,
+            Position = battery.Position,
+            VelocityX = battery.VelocityX,
+            VelocityY = battery.VelocityY,
+            HeadingDeg = battery.HeadingDeg,
+            AltitudeM = battery.AltitudeM,
+            SpeedMps = battery.SpeedMps,
+            RequestedHeadingDeg = battery.RequestedHeadingDeg,
+            RequestedAltitudeM = battery.RequestedAltitudeM,
+            RequestedSpeedMps = battery.RequestedSpeedMps,
+            RadarMode = battery.RadarMode,
+            RadarRangeNm = battery.RadarRangeNm,
+            RadarMinAltFt = battery.RadarMinAltFt,
+            RadarOnline = battery.RadarOnline,
+            HasLowAltitudeModule = battery.HasLowAltitudeModule,
+            HasECCMSuite = battery.HasECCMSuite,
+            RadarSweepAngle = battery.RadarSweepAngle,
+            RadarSweepRateDegSec = battery.RadarSweepRateDegSec,
+            MaxLaunchers = battery.MaxLaunchers,
+            ReserveMissiles = battery.ReserveMissiles,
+            CurrentMissileType = battery.CurrentMissileType,
+            MissilesFired = battery.MissilesFired,
+            ConfirmedKills = battery.ConfirmedKills,
+            Misses = battery.Misses,
+            AlertLevel = battery.AlertLevel,
+            ROE = battery.ROE,
+            DesignatedTargetId = battery.DesignatedTargetId,
+            PowerOnline = battery.PowerOnline,
+            CommsOnline = battery.CommsOnline,
+            CoolingNominal = battery.CoolingNominal,
+            RadarHealthPct = battery.RadarHealthPct,
+            IsUnderAttack = battery.IsUnderAttack,
+            HasDataLink = battery.HasDataLink,
+            HasPassiveDetection = battery.HasPassiveDetection,
+            HasMobileCapability = battery.HasMobileCapability,
+            HasDecoyEmitter = battery.HasDecoyEmitter,
+            HasBackupPower = battery.HasBackupPower,
+            HasHardenedComms = battery.HasHardenedComms,
+            MissileMaxRangeNm = battery.MissileMaxRangeNm,
+            MissileMinRangeNm = battery.MissileMinRangeNm,
+            MissileMaxAltFt = battery.MissileMaxAltFt,
+            MissileMinAltFt = battery.MissileMinAltFt,
+            MissileSingleShotPk = battery.MissileSingleShotPk,
+            ECMActive = battery.ECMActive,
+            DamagePct = battery.DamagePct,
+            SpawnTime = battery.SpawnTime,
+            Status = battery.Status
+        };
+
+        clone.Launchers.Clear();
+        foreach (var launcher in battery.Launchers)
+        {
+            clone.Launchers.Add(new Launcher
+            {
+                Id = launcher.Id,
+                State = launcher.State,
+                MissileType = launcher.MissileType,
+                ReloadTimeSec = launcher.ReloadTimeSec,
+                ReloadProgress = launcher.ReloadProgress,
+                ActiveMissileId = launcher.ActiveMissileId,
+                HasRapidReload = launcher.HasRapidReload,
+                HasAutoLoader = launcher.HasAutoLoader
+            });
+        }
+
+        clone.SyncPhysicsState();
+        return clone;
+    }
+
+    private static TrackFile CloneTrack(TrackFile track)
+    {
+        var clone = new TrackFile
+        {
+            TrackId = track.TrackId,
+            EntityId = track.EntityId,
+            TrackDesignation = track.TrackDesignation,
+            GroupLabel = track.GroupLabel,
+            Classification = track.Classification,
+            ClassificationConfidence = track.ClassificationConfidence,
+            Position = track.Position,
+            AltitudeM = track.AltitudeM,
+            HeadingDeg = track.HeadingDeg,
+            SpeedMps = track.SpeedMps,
+            Velocity = track.Velocity,
+            PositionUncertaintyM = track.PositionUncertaintyM,
+            Quality = track.Quality,
+            DetectionCount = track.DetectionCount,
+            LastDetectionTime = track.LastDetectionTime,
+            TrackInitiatedTime = track.TrackInitiatedTime,
+            IFFInterrogated = track.IFFInterrogated,
+            IFFResponse = track.IFFResponse,
+            IFFTime = track.IFFTime,
+            IsDesignated = track.IsDesignated,
+            IsTrackHeld = track.IsTrackHeld,
+            IsBeingEngaged = track.IsBeingEngaged,
+            AssignedMissileId = track.AssignedMissileId,
+            ThreatLevel = track.ThreatLevel,
+            TimeToThreatSec = track.TimeToThreatSec,
+            ClosingSpeedMps = track.ClosingSpeedMps
+        };
+
+        foreach (var point in track.History)
+            clone.History.Add(point);
+
+        return clone;
+    }
+
+    private static Aircraft CloneAircraft(Aircraft aircraft)
+    {
+        var clone = new Aircraft
+        {
+            Designation = aircraft.Designation,
+            Type = aircraft.Type,
+            Affiliation = aircraft.Affiliation,
+            Role = aircraft.Role,
+            FuelCapacityKg = aircraft.FuelCapacityKg,
+            FuelBurnRateKgSec = aircraft.FuelBurnRateKgSec,
+            BingoFuelKg = aircraft.BingoFuelKg,
+            HasECM = aircraft.HasECM,
+            HasARMCapability = aircraft.HasARMCapability,
+            EcmPower = aircraft.EcmPower,
+            AggressivenessLevel = aircraft.AggressivenessLevel,
+            CurrentBehavior = aircraft.CurrentBehavior,
+            FuelRemainingKg = aircraft.FuelRemainingKg,
+            TargetEntityId = aircraft.TargetEntityId,
+            TargetWaypoint = aircraft.TargetWaypoint,
+            Waypoints = aircraft.Waypoints.ToList(),
+            CurrentWaypointIndex = aircraft.CurrentWaypointIndex,
+            GroupId = aircraft.GroupId,
+            FormationLeaderId = aircraft.FormationLeaderId,
+            FormationSlot = aircraft.FormationSlot,
+            RadarLockDetected = aircraft.RadarLockDetected,
+            RadarLockBearingDeg = aircraft.RadarLockBearingDeg,
+            RadarLockDetectedTime = aircraft.RadarLockDetectedTime,
+            MissileInbound = aircraft.MissileInbound,
+            MissileInboundDetectedTime = aircraft.MissileInboundDetectedTime,
+            Position = aircraft.Position,
+            VelocityX = aircraft.VelocityX,
+            VelocityY = aircraft.VelocityY,
+            HeadingDeg = aircraft.HeadingDeg,
+            AltitudeM = aircraft.AltitudeM,
+            SpeedMps = aircraft.SpeedMps,
+            RequestedHeadingDeg = aircraft.RequestedHeadingDeg,
+            RequestedAltitudeM = aircraft.RequestedAltitudeM,
+            RequestedSpeedMps = aircraft.RequestedSpeedMps,
+            RcsM2 = aircraft.RcsM2,
+            FlightModel = aircraft.FlightModel,
+            IsBeingEngaged = aircraft.IsBeingEngaged,
+            EngagedByMissileId = aircraft.EngagedByMissileId,
+            ECMActive = aircraft.ECMActive,
+            DamagePct = aircraft.DamagePct,
+            SpawnTime = aircraft.SpawnTime,
+            Status = aircraft.Status,
+            CallSign = aircraft.CallSign
+        };
+
+        clone.SyncPhysicsState();
+        return clone;
+    }
+
+    private static SAMMissile CloneMissile(SAMMissile missile)
+    {
+        var clone = new SAMMissile
+        {
+            MissileTypeName = missile.MissileTypeName,
+            Guidance = missile.Guidance,
+            MaxFlightTimeSec = missile.MaxFlightTimeSec,
+            WarheadRadiusM = missile.WarheadRadiusM,
+            FuzeRadiusM = missile.FuzeRadiusM,
+            SingleShotPk = missile.SingleShotPk,
+            GuidanceMemorySec = missile.GuidanceMemorySec,
+            TargetEntityId = missile.TargetEntityId,
+            Phase = missile.Phase,
+            FlightTimeSec = missile.FlightTimeSec,
+            GuidanceActive = missile.GuidanceActive,
+            LaunchedByBatteryId = missile.LaunchedByBatteryId,
+            LauncherId = missile.LauncherId,
+            Position = missile.Position,
+            VelocityX = missile.VelocityX,
+            VelocityY = missile.VelocityY,
+            HeadingDeg = missile.HeadingDeg,
+            AltitudeM = missile.AltitudeM,
+            SpeedMps = missile.SpeedMps,
+            RequestedHeadingDeg = missile.RequestedHeadingDeg,
+            RequestedAltitudeM = missile.RequestedAltitudeM,
+            RequestedSpeedMps = missile.RequestedSpeedMps,
+            RcsM2 = missile.RcsM2,
+            FlightModel = missile.FlightModel,
+            IsBeingEngaged = missile.IsBeingEngaged,
+            EngagedByMissileId = missile.EngagedByMissileId,
+            ECMActive = missile.ECMActive,
+            DamagePct = missile.DamagePct,
+            SpawnTime = missile.SpawnTime,
+            Status = missile.Status,
+            CallSign = missile.CallSign
+        };
+
+        clone.SyncPhysicsState();
+        return clone;
     }
 
     private void WireEvents()

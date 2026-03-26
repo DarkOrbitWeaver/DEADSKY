@@ -29,8 +29,17 @@ public partial class MainViewModel
     public string FireControlHeadlineText => CurrentSnapshot?.ActiveMissiles.Count > 0
         ? MissileFlightStatusText
         : CurrentFireControlState.FireStatusText;
-    public string FireControlSummaryText => $"{TargetLockStatusText} | {RangeEnvelopeStatusText} | {BatteryLaunchStatusText}";
+    public string FireControlSummaryText => SelectedTrack == null
+        ? $"{TargetLockStatusText} | {BatteryLaunchStatusText}"
+        : $"{TargetLockStatusText} | {RangeEnvelopeStatusText} | {BatteryLaunchStatusText}";
+    public string FireControlDetailText => SelectedTrack == null
+        ? MissileFlightStatusText
+        : $"{FireControlStatusText} | {MissileFlightStatusText}";
     public string FireControlSupportText => CurrentFireControlState.HintText;
+    public bool HasSelectedTrack => SelectedTrack != null;
+    public string TrackSelectionPromptText => HasSelectedTrack
+        ? string.Empty
+        : "Select a contact on the scope, map, or track board to hold, designate, and launch.";
 
     private void RefreshFireControlFeedback(SimulationSnapshot snapshot)
     {
@@ -61,6 +70,7 @@ public partial class MainViewModel
         OnPropertyChanged(nameof(BatteryLaunchStatusText));
         OnPropertyChanged(nameof(FireControlHeadlineText));
         OnPropertyChanged(nameof(FireControlSummaryText));
+        OnPropertyChanged(nameof(FireControlDetailText));
         OnPropertyChanged(nameof(FireControlSupportText));
         OnPropertyChanged(nameof(EngagementActionHintText));
     }
@@ -89,8 +99,10 @@ public partial class MainViewModel
                 HintText: "Select a contact on the scope or track board to enable designation and launch controls.");
         }
 
-        bool hasLock = track.IsDesignated ||
-                       (!string.IsNullOrWhiteSpace(battery.DesignatedTargetId) && battery.DesignatedTargetId == track.EntityId);
+        bool hardLock = track.IsDesignated ||
+                        (!string.IsNullOrWhiteSpace(battery.DesignatedTargetId) && battery.DesignatedTargetId == track.EntityId);
+        bool twsHold = battery.RadarMode == RadarMode.TrackWhileScan && track.IsTrackHeld;
+        bool hasTrackSupport = hardLock || twsHold;
         bool rangeOk = track.RangeNm >= battery.MissileMinRangeNm && track.RangeNm <= battery.MissileMaxRangeNm;
         bool altitudeOk = track.AltitudeFt >= battery.MissileMinAltFt && track.AltitudeFt <= battery.MissileMaxAltFt;
         bool hasReadyLauncher = battery.ReadyLaunchers > 0;
@@ -102,38 +114,48 @@ public partial class MainViewModel
         };
 
         bool inRange = rangeOk && altitudeOk;
-        bool shotReady = hasLock && inRange && hasReadyLauncher && hostileClearance;
+        bool shotReady = hasTrackSupport && inRange && hasReadyLauncher && hostileClearance;
 
-        string lockStatus = hasLock ? "LOCK" : "NO LOCK";
+        string lockStatus = hardLock
+            ? "STT LOCK"
+            : twsHold
+                ? "TWS TRACK"
+                : track.Quality == TrackQuality.Lost
+                    ? "TRACK COAST"
+                    : "SEARCH TRACK";
         string fireStatus = !rangeOk
             ? track.RangeNm > battery.MissileMaxRangeNm
                 ? "NO SHOT / LONG"
                 : "NO SHOT / MIN RANGE"
             : !altitudeOk
                 ? "NO SHOT / ALT"
-                : !hasReadyLauncher
-                    ? "NO SHOT / RELOAD"
-                    : !hostileClearance
-                        ? "NO SHOT / ROE"
-                        : hasLock
-                            ? "READY"
-                            : "IN RANGE / DESIGNATE";
+            : !hasReadyLauncher
+                ? "NO SHOT / RELOAD"
+            : !hostileClearance
+                ? "NO SHOT / ROE"
+            : hardLock
+                ? "READY / STT"
+                : twsHold
+                    ? "READY / TWS"
+                    : "IN RANGE / HOLD";
 
         string hint = !rangeOk
             ? track.RangeNm > battery.MissileMaxRangeNm
-                ? "Track is outside max range. Hold the lock and let the target walk into the basket."
+                ? "Track is outside max range. Keep the track held and let the target walk into the basket."
                 : "Track is inside minimum range. Keep tracking until the geometry opens again."
             : !altitudeOk
                 ? "Target is outside the altitude envelope. Maintain track and wait for a cleaner shot."
-                : !hasReadyLauncher
-                    ? "No ready launchers. Wait for reload or reserve recovery before engaging."
-                    : !hostileClearance
-                        ? battery.ROE == RulesOfEngagement.WeaponsHold
-                            ? "Weapons hold is active. Maintain track until the battery is cleared to shoot."
-                            : "Track is in range, but ROE still needs a hostile declaration."
-                        : hasLock
-                            ? "Fire-control solution is stable. Commit a single round or a quick salvo when ready."
-                            : "Track is inside the weapon basket. Designate to steady the solution or fire to auto-designate.";
+            : !hasReadyLauncher
+                ? "No ready launchers. Wait for reload or reserve recovery before engaging."
+            : !hostileClearance
+                ? battery.ROE == RulesOfEngagement.WeaponsHold
+                    ? "Weapons hold is active. Maintain track until the battery is cleared to shoot."
+                    : "Track is in range, but ROE still needs a hostile declaration."
+            : hardLock
+                ? "Fire-control solution is stable. Commit a single round or a quick salvo when ready."
+                : twsHold
+                    ? "TWS support is holding the track. Fire now or keep sorting other contacts."
+                    : "Track is inside the basket. Hold it in TWS for multi-target work or designate for a hard lock.";
 
         string rangeStatus = inRange ? "IN RANGE" : "OUT OF RANGE";
 

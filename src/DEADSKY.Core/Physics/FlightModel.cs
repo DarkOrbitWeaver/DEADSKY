@@ -130,7 +130,7 @@ public class FlightModel
 
     public static FlightModel SAMMissile => new()
     {
-        MaxTurnRateDegSec = 80.0,
+        MaxTurnRateDegSec = 24.0,
         MaxClimbRateMps = 500.0,
         MaxDescentRateMps = 500.0,
         MaxAccelMps2 = 400.0,

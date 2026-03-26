@@ -263,4 +263,91 @@ public class SimulationEngineTests
         Assert.False(survivingTrack!.IsBeingEngaged);
         Assert.Null(survivingTrack.AssignedMissileId);
     }
+
+    [Fact]
+    public void PlayerToggleTrackHold_AutoEntersTws_AndMarksTrackHeld()
+    {
+        using var sim = SimulationTestFactory.CreateLoadedSimulation();
+        var track = SimulationTestFactory.AddDetectedHostileTrack(sim, rangeNm: 16);
+
+        var held = sim.PlayerToggleTrackHold(track.TrackId);
+
+        Assert.True(held);
+        Assert.True(sim.Radar.TrackManager.GetById(track.TrackId)!.IsTrackHeld);
+        Assert.Equal(RadarMode.TrackWhileScan, sim.Entities.GetPlayerBattery()!.RadarMode);
+    }
+
+    [Fact]
+    public void PlayerReleaseTrack_DropsHardLock_AndReturnsRadarToTws()
+    {
+        using var sim = SimulationTestFactory.CreateLoadedSimulation();
+        var track = SimulationTestFactory.AddDetectedHostileTrack(sim, rangeNm: 14);
+
+        Assert.True(sim.PlayerDesignate(track.TrackId));
+
+        var released = sim.PlayerReleaseTrack(track.TrackId);
+
+        var refreshedTrack = sim.Radar.TrackManager.GetById(track.TrackId);
+        var battery = sim.Entities.GetPlayerBattery()!;
+        Assert.True(released);
+        Assert.NotNull(refreshedTrack);
+        Assert.False(refreshedTrack!.IsDesignated);
+        Assert.False(refreshedTrack.IsTrackHeld);
+        Assert.Null(battery.DesignatedTargetId);
+        Assert.Equal(RadarMode.TrackWhileScan, battery.RadarMode);
+    }
+
+    [Fact]
+    public void SemiActiveMissile_RemainsGuided_WhenSwitchingToTwsHeldTrack()
+    {
+        using var sim = SimulationTestFactory.CreateLoadedSimulation();
+        var track = SimulationTestFactory.AddDetectedHostileTrack(sim, rangeNm: 12);
+
+        Assert.True(sim.PlayerFire(track.TrackId), sim.Weapons.LastError);
+        var missile = sim.Entities.GetActiveMissiles().Single();
+
+        sim.PlayerSetRadarMode(RadarMode.TrackWhileScan);
+        sim.Weapons.Update(0.1);
+
+        var refreshedTrack = sim.Radar.TrackManager.GetById(track.TrackId);
+        Assert.NotNull(refreshedTrack);
+        Assert.True(refreshedTrack!.IsTrackHeld);
+        Assert.True(missile.GuidanceActive);
+        Assert.True(missile.GuidanceMemoryRemainingSec > 0);
+    }
+
+    [Fact]
+    public void MissileSelfDestructs_AfterPassingTargetInsteadOfLoopingBack()
+    {
+        var missile = new SAMMissile
+        {
+            Position = new Vec2(100, 0),
+            HeadingDeg = 90,
+            AltitudeM = 5000,
+            SpeedMps = 900,
+            FlightTimeSec = 2.0,
+            RequestedSpeedMps = 900,
+            RequestedAltitudeM = 5000
+        };
+        missile.SyncPhysicsState();
+
+        var target = new Aircraft
+        {
+            Position = Vec2.Zero,
+            AltitudeM = 5000,
+            HeadingDeg = 270,
+            SpeedMps = 250
+        };
+        target.SyncPhysicsState();
+
+        missile.UpdateGuidance(target);
+        missile.Position = new Vec2(250, 0);
+        missile.HeadingDeg = 90;
+        missile.SyncPhysicsState();
+
+        missile.UpdateGuidance(target);
+
+        Assert.True(missile.HasDetonated);
+        Assert.False(missile.WasKill);
+    }
 }

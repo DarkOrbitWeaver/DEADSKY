@@ -1,5 +1,3 @@
-using DEADSKY.Core.Simulation;
-
 namespace DEADSKY.Core.Personnel;
 
 public static class CrewRadioDirector
@@ -34,26 +32,4 @@ public static class CrewRadioDirector
         _ => "professional air defense crew member"
     };
 
-    public static string BuildFallbackLine(Soldier soldier, string playerMessage, SimulationSnapshot snapshot)
-    {
-        string normalized = playerMessage.ToLowerInvariant();
-        int hostiles = snapshot.HostileTracks.Count;
-        int readyLaunchers = snapshot.Battery?.ReadyLaunchers ?? 0;
-
-        return soldier.Role switch
-        {
-            SoldierRole.RadarOperator when normalized.Contains("picture") =>
-                $"Picture update. {hostiles} hostile track{(hostiles == 1 ? string.Empty : "s")} on scope, highest threat still closing.",
-            SoldierRole.FireControl when normalized.Contains("fire") || normalized.Contains("engage") =>
-                $"Fire control ready. {readyLaunchers} launcher{(readyLaunchers == 1 ? string.Empty : "s")} available, awaiting commit.",
-            SoldierRole.LauncherChief when normalized.Contains("reload") || normalized.Contains("missile") =>
-                $"Launch section copies. Reserve count holding at {snapshot.Battery?.ReserveMissiles ?? 0}, reload cycle monitored.",
-            SoldierRole.Signals when normalized.Contains("echo") || normalized.Contains("intel") =>
-                "Signals copies. External net traffic clean, routing command and intel traffic now.",
-            SoldierRole.Commander =>
-                $"Command copies. Maintain discipline and keep the battery aligned with mission objective. Hostile count {hostiles}.",
-            _ =>
-                "Copy. Battery standing by for next tasking."
-        };
-    }
 }

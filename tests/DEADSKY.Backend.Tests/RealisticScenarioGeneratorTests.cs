@@ -39,17 +39,28 @@ public class RealisticScenarioGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateAsync_InvalidObjectiveReferenceInReasoningContent_NormalizesAndReturnsScenario()
+    public async Task GenerateAsync_EmptyStructuredAttempt_RetriesAndNormalizesScenario()
     {
-        var handler = new StubHttpMessageHandler(
+        var handler = new SequenceHttpMessageHandler(
             """
             {
               "choices": [
                 {
                   "message": {
                     "role": "assistant",
-                    "content": "",
-                    "reasoning_content": "{\"name\":\"KOVRAN LOWLANDS DEADSKY\",\"description\":\"Low-alt raid.\",\"durationMinutes\":12,\"packages\":[{\"packageName\":\"DECOY-01\",\"role\":\"decoy\",\"designation\":\"K-7 Phantom Skimmer\",\"doctrineTags\":[\"decoy\",\"low-altitude masking\"],\"aircraftCount\":3,\"triggerMinutes\":5,\"bearingDeg\":120,\"rangeNm\":45,\"altitudeFt\":800,\"headingDeg\":120,\"speedKts\":380,\"aggressiveness\":0.7,\"targetObjectiveId\":\"DECOY-01\",\"usesTerrainMasking\":true}],\"objectives\":[{\"id\":\"DEFEND-AIRFIELD\",\"name\":\"Kovran Airfield\",\"description\":\"Protect the airfield.\",\"bearingDeg\":120,\"rangeNm\":45,\"importance\":\"high\"},{\"id\":\"DEFEND-DEPOT\",\"name\":\"Kovran Depot\",\"description\":\"Protect the depot.\",\"bearingDeg\":128,\"rangeNm\":48,\"importance\":\"medium\"}],\"weather\":{\"description\":\"Clear skies\",\"visibilityNm\":30,\"cloudCeilingFt\":1200},\"theater\":{\"theaterName\":\"Kovran Lowlands\",\"objectiveCount\":2,\"openFrequencyTraffic\":true},\"support\":[{\"supportType\":\"network_coverage\",\"availability\":\"full\"}],\"rewardFactors\":[\"objective_defended\",\"enemy_package_neutralized\"]}"
+                    "content": ""
+                  }
+                }
+              ]
+            }
+            """,
+            """
+            {
+              "choices": [
+                {
+                  "message": {
+                    "role": "assistant",
+                    "content": "{\"name\":\"KOVRAN LOWLANDS DEADSKY\",\"description\":\"Low-alt raid.\",\"durationMinutes\":12,\"packages\":[{\"packageName\":\"DECOY-01\",\"role\":\"decoy\",\"designation\":\"K-7 Phantom Skimmer\",\"doctrineTags\":[\"decoy\",\"low-altitude masking\"],\"aircraftCount\":3,\"triggerMinutes\":5,\"bearingDeg\":120,\"rangeNm\":45,\"altitudeFt\":800,\"headingDeg\":120,\"speedKts\":380,\"aggressiveness\":0.7,\"targetObjectiveId\":\"DECOY-01\",\"usesTerrainMasking\":true}],\"objectives\":[{\"id\":\"DEFEND-AIRFIELD\",\"name\":\"Kovran Airfield\",\"description\":\"Protect the airfield.\",\"bearingDeg\":120,\"rangeNm\":45,\"importance\":\"high\"},{\"id\":\"DEFEND-DEPOT\",\"name\":\"Kovran Depot\",\"description\":\"Protect the depot.\",\"bearingDeg\":128,\"rangeNm\":48,\"importance\":\"medium\"}],\"weather\":{\"description\":\"Clear skies\",\"visibilityNm\":30,\"cloudCeilingFt\":1200},\"theater\":{\"theaterName\":\"Kovran Lowlands\",\"objectiveCount\":2,\"openFrequencyTraffic\":true},\"support\":[{\"supportType\":\"network_coverage\",\"availability\":\"full\"}],\"rewardFactors\":[\"objective_defended\",\"enemy_package_neutralized\"]}"
                   }
                 }
               ]
@@ -85,6 +96,23 @@ public class RealisticScenarioGeneratorTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseBody, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class SequenceHttpMessageHandler(params string[] responseBodies) : HttpMessageHandler
+    {
+        private readonly Queue<string> _responses = new(responseBodies);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            string responseBody = _responses.Count > 0
+                ? _responses.Dequeue()
+                : responseBodies[^1];
+
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json")

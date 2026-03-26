@@ -99,6 +99,8 @@
                             <controls:RadarDisplay x:Name="RadarScope"
                                                    Margin="8"
                                                    Snapshot="{Binding CurrentSnapshot}"
+                                                   ShowAltitudeLabels="{Binding ShowRadarAltitudeLabels}"
+                                                   ShowTrackTrails="{Binding ShowRadarTrackTrails}"
                                                    SelectedTrackId="{Binding SelectedTrackId, Mode=TwoWay}"/>
                         </Border>
                         <ScrollViewer Grid.Column="1"
@@ -121,31 +123,18 @@
                                             <Button Content="80" Style="{StaticResource MilButton}" Command="{Binding SetRadarRangePresetCommand}" CommandParameter="80" Margin="6,0,0,0" ToolTip="Balanced sector scan." />
                                             <Button Content="120" Style="{StaticResource MilButton}" Command="{Binding SetRadarRangePresetCommand}" CommandParameter="120" Margin="6,0,0,0" ToolTip="Long-range early warning watch." />
                                         </UniformGrid>
-                                        <WrapPanel Margin="0,8,0,0">
-                                            <Border Style="{StaticResource StatusBadge}">
-                                                <TextBlock Text="{Binding RadarModeText}" Style="{StaticResource StatusBadgeText}" />
-                                            </Border>
-                                            <Border Style="{StaticResource StatusBadge}">
-                                                <TextBlock Text="{Binding RadarEmissionText}" Style="{StaticResource StatusBadgeText}" />
-                                            </Border>
-                                            <Border Style="{StaticResource StatusBadge}">
-                                                <TextBlock Text="{Binding RadarSweepText}" Style="{StaticResource StatusBadgeText}" />
-                                            </Border>
-                                        </WrapPanel>
+                                        <TextBlock Text="{Binding RadarModeText}" Style="{StaticResource PrimaryText}" Margin="0,8,0,0" />
+                                        <TextBlock Text="{Binding TrackHoldStatusText}" Style="{StaticResource SmallText}" Margin="0,4,0,0" />
+                                        <TextBlock Text="{Binding RadarEmissionText}" Style="{StaticResource SmallText}" Margin="0,2,0,0" />
+                                        <TextBlock Text="{Binding RadarSweepText}" Style="{StaticResource SubtleText}" Margin="0,2,0,0" />
                                     </StackPanel>
                                 </Border>
                                 <Border Style="{StaticResource MilPanel}" Padding="10" Margin="0,0,0,8">
                                     <StackPanel>
                                         <TextBlock Text="FIRE CONTROL" Style="{StaticResource HeaderText}" />
                                         <TextBlock Text="{Binding FireControlHeadlineText}" Style="{StaticResource WarningText}" Margin="0,8,0,0" />
-                                        <TextBlock Text="{Binding FireControlSummaryText}" Style="{StaticResource SmallText}" Margin="0,4,0,0" TextWrapping="Wrap" />
-                                        <WrapPanel Margin="0,8,0,0">
-                                            <Border Style="{StaticResource StatusBadge}"><TextBlock Text="{Binding TargetLockStatusText}" Style="{StaticResource StatusBadgeText}" /></Border>
-                                            <Border Style="{StaticResource StatusBadge}"><TextBlock Text="{Binding FireControlStatusText}" Style="{StaticResource StatusBadgeText}" /></Border>
-                                            <Border Style="{StaticResource StatusBadge}"><TextBlock Text="{Binding RangeEnvelopeStatusText}" Style="{StaticResource StatusBadgeText}" /></Border>
-                                            <Border Style="{StaticResource StatusBadge}"><TextBlock Text="{Binding MissileFlightStatusText}" Style="{StaticResource StatusBadgeText}" /></Border>
-                                            <Border Style="{StaticResource StatusBadge}"><TextBlock Text="{Binding BatteryLaunchStatusText}" Style="{StaticResource StatusBadgeText}" /></Border>
-                                        </WrapPanel>
+                                        <TextBlock Text="{Binding FireControlSummaryText}" Style="{StaticResource AccentText}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding FireControlDetailText}" Style="{StaticResource SmallText}" Margin="0,4,0,0" TextWrapping="Wrap" />
                                         <TextBlock Text="{Binding FireControlSupportText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,8,0,0" />
                                     </StackPanel>
                                 </Border>
@@ -153,23 +142,42 @@
                                     <StackPanel>
                                         <TextBlock Text="{Binding SelectedTrackPanelTitle}" Style="{StaticResource HeaderText}" />
                                         <TextBlock Text="{Binding SelectedTrackThreatText}" Style="{StaticResource WarningText}" Margin="0,8,0,0" />
+                                        <TextBlock Text="{Binding TrackSelectionPromptText}"
+                                                   Foreground="{StaticResource TextDimBrush}"
+                                                   FontSize="12"
+                                                   FontFamily="{StaticResource MonoFont}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,6,0,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasSelectedTrack}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <StackPanel Visibility="{Binding HasSelectedTrack, Converter={StaticResource BoolToVisibilityConverter}}">
                                         <TextBlock Text="{Binding SelectedTrackBraa}" Style="{StaticResource PrimaryText}" Margin="0,6,0,0" />
-                                        <WrapPanel Margin="0,8,0,0">
-                                            <Border Style="{StaticResource StatusBadge}"><TextBlock Text="{Binding SelectedTrackIdentityText}" Style="{StaticResource StatusBadgeText}" /></Border>
-                                            <Border Style="{StaticResource StatusBadge}"><TextBlock Text="{Binding SelectedTrackPackageText}" Style="{StaticResource StatusBadgeText}" /></Border>
-                                            <Border Style="{StaticResource StatusBadge}"><TextBlock Text="{Binding SelectedTrackRoleText}" Style="{StaticResource StatusBadgeText}" /></Border>
-                                            <Border Style="{StaticResource StatusBadge}"><TextBlock Text="{Binding SelectedTrackObjectiveText}" Style="{StaticResource StatusBadgeText}" /></Border>
-                                        </WrapPanel>
-                                        <TextBlock Text="{Binding SelectedTrackStatusText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                                        <TextBlock Text="{Binding SelectedTrackTimeToThreatText}" Style="{StaticResource SmallText}" Margin="0,4,0,0" />
-                                        <TextBlock Text="{Binding SelectedTrackEnvelopeText}" Style="{StaticResource AccentText}" Margin="0,4,0,0" />
+                                        <TextBlock Text="{Binding SelectedTrackIdentityText}" Style="{StaticResource SmallText}" Margin="0,8,0,0" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding SelectedTrackMissionText}" Style="{StaticResource SmallText}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding SelectedTrackStatusText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                        <TextBlock Text="{Binding SelectedTrackControlText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                        <TextBlock Text="{Binding SelectedTrackKinematicsText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,3,0,0" />
                                         <TextBlock Text="{Binding SelectedTrackDoctrineText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0" />
                                         <WrapPanel Margin="0,10,0,0">
                                             <Button Content="DESIGNATE" Style="{StaticResource MilButton}" Command="{Binding DesignateSelectedCommand}" ToolTip="Set the selected track as the fire-control reference." />
-                                            <Button Content="FIRE 1" Style="{StaticResource EngageButton}" Command="{Binding FireSingleCommand}" Margin="6,0,0,0" ToolTip="Commit a single missile against the selected track." />
+                                            <Button Content="{Binding TrackHoldButtonText}" Style="{StaticResource MilButton}" Command="{Binding ToggleTrackHoldSelectedCommand}" Margin="6,0,0,0" ToolTip="Keep this contact in TWS memory so you can sort multiple targets." />
+                                            <Button Content="RELEASE" Style="{StaticResource MilButton}" Command="{Binding ReleaseSelectedTrackCommand}" Margin="6,0,0,0" ToolTip="Drop the current track hold or hard lock." />
+                                        </WrapPanel>
+                                        <WrapPanel Margin="0,6,0,0">
+                                            <Button Content="FIRE 1" Style="{StaticResource EngageButton}" Command="{Binding FireSingleCommand}" ToolTip="Commit a single missile against the selected track." />
                                             <Button Content="SALVO x2" Style="{StaticResource EngageButton}" Command="{Binding FireSalvoCommand}" Margin="6,0,0,0" ToolTip="Fire two missiles quickly at the same target for a higher kill chance." />
                                         </WrapPanel>
                                         <TextBlock Text="{Binding EngagementActionHintText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                                        </StackPanel>
                                         <ItemsControl ItemsSource="{Binding LauncherStates}" Margin="0,10,0,0">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
@@ -218,6 +226,8 @@
                         <TextBlock Text="{Binding AirPictureText}" Style="{StaticResource PrimaryText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
                         <TextBlock Text="{Binding RecommendationText}" Style="{StaticResource PrimaryText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
                         <TextBlock Text="{Binding IncomingThreatText}" Style="{StaticResource CriticalText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        <TextBlock Text="{Binding SupportActivitySummaryText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                        <TextBlock Text="{Binding VisibleSupportPictureText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
                         <TextBlock Text="{Binding ObjectiveStatusText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                         <TextBlock Text="{Binding WeatherSummary}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                     </StackPanel>
@@ -241,11 +251,14 @@
                                   SelectedValuePath="TrackId"
                                   SelectedValue="{Binding SelectedTrackId, Mode=TwoWay}"
                                   Margin="8"
+                                  ScrollViewer.CanContentScroll="True"
+                                  VirtualizingPanel.IsVirtualizing="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling"
                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                             <ListView.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Margin="0,0,0,8"
-                                            Padding="10,8"
+                                    <Border Margin="0,0,0,4"
+                                            Padding="7,5"
                                             Background="#0B141B"
                                             BorderBrush="{Binding RowBrush}"
                                             BorderThickness="1"
@@ -254,30 +267,30 @@
                                             <Grid.RowDefinitions>
                                                 <RowDefinition Height="Auto"/>
                                                 <RowDefinition Height="Auto"/>
-                                                <RowDefinition Height="Auto"/>
-                                                <RowDefinition Height="Auto"/>
                                             </Grid.RowDefinitions>
                                             <DockPanel LastChildFill="False">
-                                                <TextBlock Text="{Binding Callout}" Style="{StaticResource PrimaryText}" Foreground="{Binding RowBrush}"/>
-                                                <TextBlock Text="{Binding TrackId}" Style="{StaticResource SmallText}" Margin="8,1,0,0"/>
-                                                <TextBlock DockPanel.Dock="Right" Text="{Binding TimeToThreatDisplay}" Style="{StaticResource WarningText}"/>
+                                                <TextBlock Text="{Binding TrackId}" Style="{StaticResource SmallText}" Foreground="{Binding RowBrush}" FontWeight="Bold"/>
+                                                <TextBlock Text="{Binding Callout}" Style="{StaticResource SmallText}" Margin="8,0,0,0" Foreground="{Binding RowBrush}"/>
+                                                <TextBlock DockPanel.Dock="Right" Text="{Binding ThreatText}" Style="{StaticResource WarningText}" />
                                             </DockPanel>
-                                            <WrapPanel Grid.Row="1" Margin="0,6,0,0">
-                                                <Border Style="{StaticResource StatusBadge}">
-                                                    <TextBlock Text="{Binding Bearing}" Style="{StaticResource StatusBadgeText}"/>
-                                                </Border>
-                                                <Border Style="{StaticResource StatusBadge}">
-                                                    <TextBlock Text="{Binding RangeText}" Style="{StaticResource StatusBadgeText}"/>
-                                                </Border>
-                                                <Border Style="{StaticResource StatusBadge}">
-                                                    <TextBlock Text="{Binding AltitudeText}" Style="{StaticResource StatusBadgeText}"/>
-                                                </Border>
-                                                <Border Style="{StaticResource StatusBadge}">
-                                                    <TextBlock Text="{Binding Identity}" Style="{StaticResource StatusBadgeText}"/>
-                                                </Border>
-                                            </WrapPanel>
-                                            <TextBlock Grid.Row="2" Text="{Binding StateDisplay}" Style="{StaticResource SmallText}" Margin="0,6,0,0"/>
-                                            <TextBlock Grid.Row="3" Text="{Binding TagsDisplay}" Style="{StaticResource SubtleText}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                            <Grid Grid.Row="1" Margin="0,4,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Style="{StaticResource SmallText}" TextTrimming="CharacterEllipsis">
+                                                    <Run Text="{Binding Bearing}"/>
+                                                    <Run Text="/"/>
+                                                    <Run Text="{Binding RangeText}"/>
+                                                    <Run Text=" "/>
+                                                    <Run Text="{Binding AltitudeText}"/>
+                                                    <Run Text=" "/>
+                                                    <Run Text="{Binding Aspect}"/>
+                                                    <Run Text=" | "/>
+                                                    <Run Text="{Binding StateDisplay}"/>
+                                                </TextBlock>
+                                                <TextBlock Grid.Column="1" Text="{Binding PackageLabel}" Style="{StaticResource SubtleText}" Margin="8,0,0,0" TextTrimming="CharacterEllipsis"/>
+                                            </Grid>
                                         </Grid>
                                     </Border>
                                 </DataTemplate>
@@ -525,6 +538,9 @@
                                     <ListView Grid.Row="1"
                                               ItemsSource="{Binding PriorityOverlayMessages}"
                                               Margin="0,8,0,0"
+                                              ScrollViewer.CanContentScroll="True"
+                                              VirtualizingPanel.IsVirtualizing="True"
+                                              VirtualizingPanel.VirtualizationMode="Recycling"
                                               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                         <ListView.ItemTemplate>
                                             <DataTemplate>
@@ -573,6 +589,9 @@
                                 </TabItem.Header>
                                 <ListView ItemsSource="{Binding OpsFeed}"
                                           Margin="8"
+                                          ScrollViewer.CanContentScroll="True"
+                                          VirtualizingPanel.IsVirtualizing="True"
+                                          VirtualizingPanel.VirtualizationMode="Recycling"
                                           ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                     <ListView.ItemTemplate>
                                         <DataTemplate>
@@ -603,8 +622,7 @@
             </Border>
         </Grid>
 
-        <Grid Visibility="{Binding IsCommandMenuOpen, Converter={StaticResource BoolToVisibilityConverter}}"
-              IsHitTestVisible="False">
+        <Grid Visibility="{Binding IsCommandMenuOpen, Converter={StaticResource BoolToVisibilityConverter}}">
             <Border Width="520"
                     Margin="12"
                     HorizontalAlignment="Left"
@@ -663,9 +681,31 @@
                             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="12">
                                 <StackPanel>
                                     <TextBlock Text="STATION SHORTCUTS" Style="{StaticResource HeaderText}"/>
-                                    <TextBlock Text="SPACE start or pause | TAB cycle tracks | D designate | F fire one | G salvo x2" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
-                                    <TextBlock Text="Q/W/E switch radar modes | 1/2/3 change range | M open map | ` focus comms" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                    <TextBlock Text="Tooltips on the control rail replace the old wall of descriptive text. Select tracks on the scope or board to arm the fire-control panel." Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                                    <TextBlock Text="SPACE start or pause | TAB cycle tracks | D designate | H hold track | R release track" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                    <TextBlock Text="F fire one | G salvo x2 | Q/W/E switch radar modes | 1/2/3 change range" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                    <TextBlock Text="M open map | Mouse wheel on map zooms only the map | ` focus comms" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                    <TextBlock Text="Use HOLD TRACK in TWS to sort multiple enemies, then DESIGNATE only when you want a hard lock." Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+                        <TabItem Header="Settings">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="12">
+                                <StackPanel>
+                                    <TextBlock Text="LIVE SETTINGS" Style="{StaticResource HeaderText}"/>
+                                    <TextBlock Text="These are active gameplay/UI switches, not dead legacy placeholders." Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                    <CheckBox Content="Auto-focus scope range to selected track"
+                                              IsChecked="{Binding AutoFocusSelectedTrack}"
+                                              Margin="0,12,0,0"/>
+                                    <CheckBox Content="Show altitude and speed labels on radar contacts"
+                                              IsChecked="{Binding ShowRadarAltitudeLabels}"
+                                              Margin="0,10,0,0"/>
+                                    <CheckBox Content="Show radar track trails and held-track memory lines"
+                                              IsChecked="{Binding ShowRadarTrackTrails}"
+                                              Margin="0,10,0,0"/>
+                                    <CheckBox Content="Show tactical map labels and sector notes"
+                                              IsChecked="{Binding ShowTacticalMapLabels}"
+                                              Margin="0,10,0,0"/>
+                                    <TextBlock Text="Map zoom is independent from the radar scope range. Changing one will not disturb the other." Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,12,0,0"/>
                                 </StackPanel>
                             </ScrollViewer>
                         </TabItem>

@@ -4,19 +4,46 @@ using System.Windows.Input;
 using System.Windows.Media;
 using DEADSKY.Core.Physics;
 using DEADSKY.Core.Radar;
-using DEADSKY.Core.Scenario;
 using DEADSKY.Core.Simulation;
 
 namespace DEADSKY.App.Controls;
 
 public class TacticalMapDisplay : FrameworkElement
 {
+    private static readonly double[] ZoomPresetsNm = [60, 90, 120, 180, 240];
+    private static readonly Typeface MapTypeface = new(new FontFamily("Consolas"), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+    private static readonly Typeface MapTypefaceBold = new(new FontFamily("Consolas"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
+    private static readonly Typeface MapTypefaceSemiBold = new(new FontFamily("Consolas"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
+    private static readonly Brush RootBackgroundBrush = CreateFrozenBrush(Color.FromRgb(11, 16, 12));
+    private static readonly Brush MapBackgroundBrush = CreateFrozenBrush(Color.FromRgb(18, 28, 21));
+    private static readonly Pen MapBorderPen = CreateFrozenPen(Color.FromRgb(56, 84, 63), 1);
+    private static readonly Pen RidgePen = CreateFrozenPen(Color.FromRgb(92, 104, 58), 2);
+    private static readonly Pen ValleyPen = CreateFrozenPen(Color.FromRgb(42, 78, 98), 1.4);
+    private static readonly Brush SectorBrush = CreateFrozenBrush(Color.FromArgb(40, 134, 122, 76));
+    private static readonly Brush FarmBrush = CreateFrozenBrush(Color.FromArgb(46, 70, 42, 24));
+    private static readonly Pen GridPen = CreateFrozenPen(Color.FromArgb(55, 81, 104, 86), 0.8);
+    private static readonly Pen DefenseRingPen = CreateFrozenPen(Color.FromArgb(90, 0, 220, 120), 1);
+    private static readonly Brush DefenseRingFill = CreateFrozenBrush(Color.FromArgb(24, 0, 160, 70));
+    private static readonly Brush HostileTrackBrush = CreateFrozenBrush(Color.FromRgb(214, 73, 73));
+    private static readonly Brush FriendlyTrackBrush = CreateFrozenBrush(Color.FromRgb(74, 152, 224));
+    private static readonly Brush UnknownTrackBrush = CreateFrozenBrush(Color.FromRgb(219, 206, 78));
+    private static readonly Pen MissilePen = CreateFrozenPen(Color.FromRgb(255, 140, 64), 1.6);
+    private static readonly Brush MissileBrush = CreateFrozenBrush(Color.FromRgb(255, 180, 110));
+    private static readonly Brush BatteryBrush = CreateFrozenBrush(Color.FromRgb(60, 225, 128));
+    private static readonly Pen OutlinePen = CreateFrozenPen(Colors.Black, 1);
+    private static readonly Pen SelectedTrackPen = CreateFrozenPen(Colors.Lime, 1.2);
+    private static readonly Pen HeldTrackPen = CreateFrozenPen(Colors.LightGreen, 1);
+
+    private StreamGeometry? _cachedRidgeGeometry;
+    private StreamGeometry? _cachedRiverGeometry;
+    private Rect _cachedTerrainRect;
+
     public static readonly DependencyProperty SnapshotProperty =
         DependencyProperty.Register(
             nameof(Snapshot),
             typeof(SimulationSnapshot),
             typeof(TacticalMapDisplay),
-            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, OnViewSourceChanged));
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
 
     public static readonly DependencyProperty SelectedTrackIdProperty =
         DependencyProperty.Register(
@@ -25,24 +52,14 @@ public class TacticalMapDisplay : FrameworkElement
             typeof(TacticalMapDisplay),
             new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
 
-    public static readonly DependencyProperty ScenarioProperty =
+    public static readonly DependencyProperty ShowLabelsProperty =
         DependencyProperty.Register(
-            nameof(Scenario),
-            typeof(ScenarioDefinition),
+            nameof(ShowLabels),
+            typeof(bool),
             typeof(TacticalMapDisplay),
-            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+            new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsRender));
 
-    public event Action<string>? TrackClicked;
-
-    private double _viewRangeNm = 180;
-    private Vec2 _viewOffset = Vec2.Zero;
-    private bool _isPanning;
-    private Point _lastPanPoint;
-
-    public TacticalMapDisplay()
-    {
-        Focusable = true;
-    }
+    private double _mapRangeNm = 180;
 
     public SimulationSnapshot? Snapshot
     {
@@ -56,10 +73,20 @@ public class TacticalMapDisplay : FrameworkElement
         set => SetValue(SelectedTrackIdProperty, value);
     }
 
-    public ScenarioDefinition? Scenario
+    public bool ShowLabels
     {
-        get => (ScenarioDefinition?)GetValue(ScenarioProperty);
-        set => SetValue(ScenarioProperty, value);
+        get => (bool)GetValue(ShowLabelsProperty);
+        set => SetValue(ShowLabelsProperty, value);
+    }
+
+    public double MapRangeNm => _mapRangeNm;
+
+    public event Action<string>? TrackClicked;
+    public event Action<double>? MapZoomChanged;
+
+    public TacticalMapDisplay()
+    {
+        SizeChanged += (_, _) => InvalidateTerrainCache();
     }
 
     protected override void OnRender(DrawingContext dc)
@@ -67,12 +94,12 @@ public class TacticalMapDisplay : FrameworkElement
         base.OnRender(dc);
 
         var bounds = new Rect(0, 0, ActualWidth, ActualHeight);
-        dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(11, 16, 12)), null, bounds);
+        dc.DrawRectangle(RootBackgroundBrush, null, bounds);
 
         if (ActualWidth < 10 || ActualHeight < 10)
             return;
 
-        var mapRect = GetMapRect();
+        var mapRect = new Rect(18, 18, Math.Max(10, ActualWidth - 36), Math.Max(10, ActualHeight - 36));
         DrawBackdrop(dc, mapRect);
         DrawTerrain(dc, mapRect);
         DrawGrid(dc, mapRect);
@@ -81,238 +108,101 @@ public class TacticalMapDisplay : FrameworkElement
             return;
 
         DrawDefenseRings(dc, mapRect, Snapshot);
-        DrawScenarioOverlays(dc, mapRect);
+        DrawLandmarks(dc, mapRect);
         DrawEntities(dc, mapRect, Snapshot);
         DrawMissiles(dc, mapRect, Snapshot);
-        DrawViewHud(dc, mapRect);
+        DrawLegend(dc, mapRect, Snapshot);
     }
 
-    protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
+    private static void DrawBackdrop(DrawingContext dc, Rect rect)
     {
-        base.OnMouseLeftButtonDown(e);
-        if (Snapshot == null)
-            return;
-
-        var pos = e.GetPosition(this);
-        var mapRect = GetMapRect();
-        if (!mapRect.Contains(pos))
-            return;
-
-        string? nearest = null;
-        double nearestDistance = 14;
-        foreach (var track in Snapshot.AllTracks)
-        {
-            var point = GetMapPoint(mapRect, track.Position);
-            double distance = (point - pos).Length;
-            if (distance < nearestDistance)
-            {
-                nearestDistance = distance;
-                nearest = track.TrackId;
-            }
-        }
-
-        if (nearest != null)
-            TrackClicked?.Invoke(nearest);
-    }
-
-    protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
-    {
-        base.OnMouseRightButtonDown(e);
-        if (Snapshot == null)
-            return;
-
-        _isPanning = true;
-        _lastPanPoint = e.GetPosition(this);
-        CaptureMouse();
-        Cursor = Cursors.SizeAll;
-        e.Handled = true;
-    }
-
-    protected override void OnMouseMove(MouseEventArgs e)
-    {
-        base.OnMouseMove(e);
-        if (!_isPanning || Snapshot == null)
-            return;
-
-        var current = e.GetPosition(this);
-        var delta = current - _lastPanPoint;
-        _lastPanPoint = current;
-        _viewOffset -= ScreenDeltaToWorld(delta, GetMapRect());
-        ClampViewOffset();
-        InvalidateVisual();
-    }
-
-    protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
-    {
-        base.OnMouseRightButtonUp(e);
-        EndPan();
-        e.Handled = true;
-    }
-
-    protected override void OnLostMouseCapture(MouseEventArgs e)
-    {
-        base.OnLostMouseCapture(e);
-        EndPan();
-    }
-
-    protected override void OnMouseLeave(MouseEventArgs e)
-    {
-        base.OnMouseLeave(e);
-        if (_isPanning && e.RightButton != MouseButtonState.Pressed)
-            EndPan();
-    }
-
-    protected override void OnMouseWheel(MouseWheelEventArgs e)
-    {
-        base.OnMouseWheel(e);
-        if (Snapshot == null)
-            return;
-
-        var mapRect = GetMapRect();
-        var focusWorld = ScreenToWorld(e.GetPosition(this), mapRect);
-        double zoomFactor = e.Delta > 0 ? 0.86 : 1.18;
-        _viewRangeNm = Math.Clamp(_viewRangeNm * zoomFactor, 30, 420);
-        _viewOffset = focusWorld - ScreenToWorldOffset(e.GetPosition(this), mapRect, _viewRangeNm);
-        ClampViewOffset();
-        InvalidateVisual();
-        e.Handled = true;
-    }
-
-    protected override void OnMouseDown(MouseButtonEventArgs e)
-    {
-        base.OnMouseDown(e);
-        if (e.ChangedButton == MouseButton.Middle)
-        {
-            ResetView();
-            e.Handled = true;
-        }
-    }
-
-    private void DrawBackdrop(DrawingContext dc, Rect rect)
-    {
-        dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(18, 28, 21)), new Pen(new SolidColorBrush(Color.FromRgb(56, 84, 63)), 1), rect);
+        dc.DrawRectangle(MapBackgroundBrush, MapBorderPen, rect);
     }
 
     private void DrawTerrain(DrawingContext dc, Rect rect)
     {
-        var ridgePen = new Pen(new SolidColorBrush(Color.FromRgb(92, 104, 58)), 2);
-        var valleyPen = new Pen(new SolidColorBrush(Color.FromRgb(42, 78, 98)), 1.4);
-        var sectorBrush = new SolidColorBrush(Color.FromArgb(40, 134, 122, 76));
-
-        var ridge = new StreamGeometry();
-        using (var ctx = ridge.Open())
-        {
-            ctx.BeginFigure(new Point(rect.Left + 20, rect.Top + rect.Height * 0.28), false, false);
-            ctx.PolyLineTo(new[]
-            {
-                new Point(rect.Left + rect.Width * 0.22, rect.Top + rect.Height * 0.18),
-                new Point(rect.Left + rect.Width * 0.42, rect.Top + rect.Height * 0.24),
-                new Point(rect.Left + rect.Width * 0.58, rect.Top + rect.Height * 0.15),
-                new Point(rect.Left + rect.Width * 0.84, rect.Top + rect.Height * 0.2),
-                new Point(rect.Right - 22, rect.Top + rect.Height * 0.12)
-            }, true, true);
-        }
-
-        ridge.Freeze();
-        dc.DrawGeometry(null, ridgePen, ridge);
-
-        var river = new StreamGeometry();
-        using (var ctx = river.Open())
-        {
-            ctx.BeginFigure(new Point(rect.Left + rect.Width * 0.13, rect.Bottom - 16), false, false);
-            ctx.BezierTo(
-                new Point(rect.Left + rect.Width * 0.18, rect.Top + rect.Height * 0.68),
-                new Point(rect.Left + rect.Width * 0.36, rect.Top + rect.Height * 0.54),
-                new Point(rect.Left + rect.Width * 0.48, rect.Top + rect.Height * 0.48), true, true);
-            ctx.BezierTo(
-                new Point(rect.Left + rect.Width * 0.64, rect.Top + rect.Height * 0.4),
-                new Point(rect.Left + rect.Width * 0.74, rect.Top + rect.Height * 0.22),
-                new Point(rect.Right - 28, rect.Top + rect.Height * 0.08), true, true);
-        }
-
-        river.Freeze();
-        dc.DrawGeometry(null, valleyPen, river);
-
-        dc.DrawRectangle(sectorBrush, null, new Rect(rect.Left + rect.Width * 0.62, rect.Top + rect.Height * 0.56, rect.Width * 0.18, rect.Height * 0.14));
-        dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(46, 70, 42, 24)), null, new Rect(rect.Left + rect.Width * 0.16, rect.Top + rect.Height * 0.68, rect.Width * 0.16, rect.Height * 0.12));
+        EnsureTerrainCache(rect);
+        dc.DrawGeometry(null, RidgePen, _cachedRidgeGeometry);
+        dc.DrawGeometry(null, ValleyPen, _cachedRiverGeometry);
+        dc.DrawRectangle(SectorBrush, null, new Rect(rect.Left + rect.Width * 0.62, rect.Top + rect.Height * 0.56, rect.Width * 0.18, rect.Height * 0.14));
+        dc.DrawRectangle(FarmBrush, null, new Rect(rect.Left + rect.Width * 0.16, rect.Top + rect.Height * 0.68, rect.Width * 0.16, rect.Height * 0.12));
     }
 
-    private void DrawGrid(DrawingContext dc, Rect rect)
+    private static void DrawGrid(DrawingContext dc, Rect rect)
     {
-        var pen = new Pen(new SolidColorBrush(Color.FromArgb(55, 81, 104, 86)), 0.8);
         for (int i = 1; i < 6; i++)
         {
             var x = rect.Left + rect.Width * i / 6.0;
             var y = rect.Top + rect.Height * i / 6.0;
-            dc.DrawLine(pen, new Point(x, rect.Top), new Point(x, rect.Bottom));
-            dc.DrawLine(pen, new Point(rect.Left, y), new Point(rect.Right, y));
+            dc.DrawLine(GridPen, new Point(x, rect.Top), new Point(x, rect.Bottom));
+            dc.DrawLine(GridPen, new Point(rect.Left, y), new Point(rect.Right, y));
         }
     }
 
     private void DrawDefenseRings(DrawingContext dc, Rect rect, SimulationSnapshot snapshot)
     {
-        var batteryPoint = GetMapPoint(rect, Vec2.Zero);
-        var rangeFactor = rect.Width / 2.4 / _viewRangeNm;
+        var outer = GetMapPoint(rect, Vec2.Zero, _mapRangeNm);
+        var rangeFactor = rect.Width / 2.4 / _mapRangeNm;
         var maxRing = snapshot.Battery?.MissileMaxRangeNm ?? 18;
         var radarRing = snapshot.RadarRangeNm;
 
-        dc.DrawEllipse(null, new Pen(new SolidColorBrush(Color.FromArgb(90, 0, 220, 120)), 1), batteryPoint, radarRing * rangeFactor, radarRing * rangeFactor);
-        dc.DrawEllipse(new SolidColorBrush(Color.FromArgb(24, 0, 160, 70)), new Pen(new SolidColorBrush(Color.FromArgb(90, 0, 220, 120)), 1), batteryPoint, maxRing * rangeFactor, maxRing * rangeFactor);
+        dc.DrawEllipse(null, DefenseRingPen, outer, radarRing * rangeFactor, radarRing * rangeFactor);
+        dc.DrawEllipse(DefenseRingFill, DefenseRingPen, outer, maxRing * rangeFactor, maxRing * rangeFactor);
     }
 
-    private void DrawScenarioOverlays(DrawingContext dc, Rect rect)
+    private void DrawLandmarks(DrawingContext dc, Rect rect)
     {
-        if (Scenario?.SectorMap.Objectives.Count > 0)
-        {
-            foreach (var objective in Scenario.SectorMap.Objectives)
-            {
-                var point = GetMapPoint(rect, CoordinateSystem.FromBearingRange(objective.BearingDeg, objective.RangeNm));
-                DrawObjectiveMarker(dc, point, objective.Importance);
-            }
-        }
+        if (!ShowLabels)
+            return;
+
+        DrawLabel(dc, "SABLE RIDGE", new Point(rect.Left + rect.Width * 0.46, rect.Top + rect.Height * 0.12), Brushes.DarkKhaki, 12, FontWeights.Bold);
+        DrawLabel(dc, "VANTA RIVER", new Point(rect.Left + rect.Width * 0.57, rect.Top + rect.Height * 0.42), Brushes.SteelBlue, 11, FontWeights.SemiBold);
+        DrawLabel(dc, "KOVRAN DEPOT", new Point(rect.Left + rect.Width * 0.54, rect.Top + rect.Height * 0.62), Brushes.LightGoldenrodYellow, 11, FontWeights.Bold);
+        DrawLabel(dc, "ASHEN FARMS", new Point(rect.Left + rect.Width * 0.2, rect.Top + rect.Height * 0.78), Brushes.OliveDrab, 10, FontWeights.Normal);
     }
 
     private void DrawEntities(DrawingContext dc, Rect rect, SimulationSnapshot snapshot)
     {
-        DrawBattery(dc, GetMapPoint(rect, Vec2.Zero));
+        var batteryPoint = GetMapPoint(rect, Vec2.Zero, _mapRangeNm);
+        DrawBattery(dc, batteryPoint);
 
         foreach (var track in snapshot.AllTracks.OrderByDescending(t => t.ThreatLevel))
         {
-            var point = GetMapPoint(rect, track.Position);
+            var point = GetMapPoint(rect, track.Position, _mapRangeNm);
             var fill = track.Classification switch
             {
-                TrackClassification.Hostile or TrackClassification.AssumedHostile => new SolidColorBrush(Color.FromRgb(214, 73, 73)),
-                TrackClassification.Friendly => new SolidColorBrush(Color.FromRgb(74, 152, 224)),
-                _ => new SolidColorBrush(Color.FromRgb(219, 206, 78))
+                TrackClassification.Hostile or TrackClassification.AssumedHostile => HostileTrackBrush,
+                TrackClassification.Friendly => FriendlyTrackBrush,
+                _ => UnknownTrackBrush
             };
 
-            DrawTrack(dc, point, fill, track.TrackId == SelectedTrackId);
-            if (track.TrackId == SelectedTrackId)
+            DrawTrack(dc, point, fill, track.TrackId == SelectedTrackId, track.IsTrackHeld || track.IsDesignated);
+
+            if (ShowLabels)
             {
-                DrawLabel(dc, track.TrackDesignation.ToUpperInvariant(), new Point(point.X + 8, point.Y - 4), fill, 10, FontWeights.SemiBold);
-                DrawLabel(dc, $"{track.TrackId} {track.RangeNm:0.0}NM", new Point(point.X + 8, point.Y + 10), Brushes.Gainsboro, 9, FontWeights.Normal);
+                DrawLabel(dc, $"{track.TrackDesignation} {track.TrackId}", new Point(point.X + 8, point.Y - 4), fill, 10, FontWeights.SemiBold);
+                DrawLabel(dc, $"{track.RangeNm:0.0}nm / FL{track.AltitudeFt / 100:0}", new Point(point.X + 8, point.Y + 10), Brushes.Gainsboro, 9, FontWeights.Normal);
             }
         }
     }
 
     private void DrawMissiles(DrawingContext dc, Rect rect, SimulationSnapshot snapshot)
     {
-        var pen = new Pen(new SolidColorBrush(Color.FromRgb(255, 140, 64)), 1.6);
         foreach (var missile in snapshot.ActiveMissiles)
         {
-            var point = GetMapPoint(rect, missile.Position);
+            var point = GetMapPoint(rect, missile.Position, _mapRangeNm);
             var heading = CoordinateSystem.DegToRad(missile.HeadingDeg);
             var tail = new Point(point.X - Math.Sin(heading) * 10, point.Y + Math.Cos(heading) * 10);
-            dc.DrawLine(pen, tail, point);
-            dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(255, 180, 110)), null, point, 3.2, 3.2);
+            dc.DrawLine(MissilePen, tail, point);
+            dc.DrawEllipse(MissileBrush, null, point, 3.2, 3.2);
         }
     }
 
-    private void DrawViewHud(DrawingContext dc, Rect rect)
+    private void DrawLegend(DrawingContext dc, Rect rect, SimulationSnapshot snapshot)
     {
-        DrawLabel(dc, $"VIEW {_viewRangeNm:0}NM", new Point(rect.Left + 8, rect.Bottom - 28), Brushes.Gainsboro, 10, FontWeights.Bold);
-        DrawLabel(dc, $"PAN {CoordinateSystem.MetersToNm(_viewOffset.Length):0.0}NM | RMB DRAG | WHEEL ZOOM | MMB RESET",
-            new Point(rect.Left + 8, rect.Bottom - 14), Brushes.DarkSeaGreen, 9, FontWeights.Normal);
+        DrawLabel(dc, $"SECTOR 7A // {snapshot.GameTimeString}", new Point(rect.Left + 10, rect.Top + 10), Brushes.Gainsboro, 12, FontWeights.Bold);
+        DrawLabel(dc, $"Hostiles {snapshot.HostileTracks.Count}  |  Missiles {snapshot.ActiveMissiles.Count}  |  Mode {snapshot.RadarMode}", new Point(rect.Left + 10, rect.Top + 28), Brushes.LightGreen, 10, FontWeights.Normal);
+        DrawLabel(dc, $"Map range {_mapRangeNm:0}nm  |  Wheel zoom  |  Click track to select", new Point(rect.Left + 10, rect.Top + 44), Brushes.DarkSeaGreen, 9, FontWeights.Normal);
     }
 
     private static void DrawBattery(DrawingContext dc, Point point)
@@ -324,13 +214,13 @@ public class TacticalMapDisplay : FrameworkElement
             ctx.LineTo(new Point(point.X + 9, point.Y + 8), true, false);
             ctx.LineTo(new Point(point.X - 9, point.Y + 8), true, false);
         }
-
         geometry.Freeze();
-        dc.DrawGeometry(new SolidColorBrush(Color.FromRgb(60, 225, 128)), new Pen(Brushes.Black, 1), geometry);
-        DrawLabel(dc, "BATTERY", new Point(point.X + 10, point.Y - 16), Brushes.LightGreen, 10, FontWeights.Bold);
+
+        dc.DrawGeometry(BatteryBrush, OutlinePen, geometry);
+        DrawLabel(dc, "ALPHA BATTERY", new Point(point.X + 10, point.Y - 16), Brushes.LightGreen, 10, FontWeights.Bold);
     }
 
-    private static void DrawTrack(DrawingContext dc, Point point, Brush fill, bool selected)
+    private static void DrawTrack(DrawingContext dc, Point point, Brush fill, bool selected, bool held)
     {
         var diamond = new StreamGeometry();
         using (var ctx = diamond.Open())
@@ -340,76 +230,21 @@ public class TacticalMapDisplay : FrameworkElement
             ctx.LineTo(new Point(point.X, point.Y + 6), true, false);
             ctx.LineTo(new Point(point.X - 6, point.Y), true, false);
         }
-
         diamond.Freeze();
-        dc.DrawGeometry(fill, new Pen(Brushes.Black, 1), diamond);
+
+        dc.DrawGeometry(fill, OutlinePen, diamond);
         if (selected)
-            dc.DrawEllipse(null, new Pen(Brushes.Lime, 1.2), point, 10, 10);
+            dc.DrawEllipse(null, SelectedTrackPen, point, 10, 10);
+        else if (held)
+            dc.DrawEllipse(null, HeldTrackPen, point, 8, 8);
     }
 
-    private static void DrawObjectiveMarker(DrawingContext dc, Point point, string importance)
+    private static Point GetMapPoint(Rect rect, Vec2 position, double mapRangeNm)
     {
-        var brush = importance.Equals("primary", StringComparison.OrdinalIgnoreCase)
-            ? new SolidColorBrush(Color.FromRgb(255, 214, 92))
-            : new SolidColorBrush(Color.FromRgb(115, 190, 255));
-        var pen = new Pen(brush, 1.4);
-        dc.DrawEllipse(null, pen, point, 7, 7);
-        dc.DrawLine(pen, new Point(point.X - 9, point.Y), new Point(point.X + 9, point.Y));
-        dc.DrawLine(pen, new Point(point.X, point.Y - 9), new Point(point.X, point.Y + 9));
-    }
-
-    private Point GetMapPoint(Rect rect, Vec2 position)
-    {
-        var centered = position - _viewOffset;
-        double rangeM = CoordinateSystem.NmToMeters(_viewRangeNm);
-        double x = rect.Left + rect.Width / 2 + centered.X / rangeM * (rect.Width / 2);
-        double y = rect.Top + rect.Height / 2 - centered.Y / rangeM * (rect.Height / 2);
+        var rangeM = CoordinateSystem.NmToMeters(mapRangeNm);
+        var x = rect.Left + rect.Width / 2 + position.X / rangeM * (rect.Width / 2);
+        var y = rect.Top + rect.Height / 2 - position.Y / rangeM * (rect.Height / 2);
         return new Point(x, y);
-    }
-
-    private Vec2 ScreenToWorld(Point point, Rect rect) => _viewOffset + ScreenToWorldOffset(point, rect, _viewRangeNm);
-
-    private static Vec2 ScreenToWorldOffset(Point point, Rect rect, double viewRangeNm)
-    {
-        double rangeM = CoordinateSystem.NmToMeters(viewRangeNm);
-        double x = (point.X - (rect.Left + rect.Width / 2)) / (rect.Width / 2) * rangeM;
-        double y = -((point.Y - (rect.Top + rect.Height / 2)) / (rect.Height / 2) * rangeM);
-        return new Vec2(x, y);
-    }
-
-    private Vec2 ScreenDeltaToWorld(Vector delta, Rect rect)
-    {
-        double rangeM = CoordinateSystem.NmToMeters(_viewRangeNm);
-        double worldX = delta.X / (rect.Width / 2) * rangeM;
-        double worldY = -(delta.Y / (rect.Height / 2) * rangeM);
-        return new Vec2(worldX, worldY);
-    }
-
-    private Rect GetMapRect() => new(18, 18, Math.Max(10, ActualWidth - 36), Math.Max(10, ActualHeight - 36));
-
-    private void ResetView()
-    {
-        _viewRangeNm = 180;
-        _viewOffset = Vec2.Zero;
-        InvalidateVisual();
-    }
-
-    private void ClampViewOffset()
-    {
-        double maxOffsetM = CoordinateSystem.NmToMeters(_viewRangeNm * 1.35);
-        _viewOffset = new Vec2(
-            Math.Clamp(_viewOffset.X, -maxOffsetM, maxOffsetM),
-            Math.Clamp(_viewOffset.Y, -maxOffsetM, maxOffsetM));
-    }
-
-    private void EndPan()
-    {
-        if (!_isPanning)
-            return;
-
-        _isPanning = false;
-        Cursor = Cursors.Arrow;
-        ReleaseMouseCapture();
     }
 
     private static void DrawLabel(DrawingContext dc, string text, Point point, Brush brush, double size, FontWeight weight)
@@ -418,7 +253,7 @@ public class TacticalMapDisplay : FrameworkElement
             text,
             CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight,
-            new Typeface(new FontFamily("Consolas"), FontStyles.Normal, weight, FontStretches.Normal),
+            ResolveTypeface(weight),
             size,
             brush,
             1.0);
@@ -426,9 +261,153 @@ public class TacticalMapDisplay : FrameworkElement
         dc.DrawText(formatted, point);
     }
 
-    private static void OnViewSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
-        if (d is TacticalMapDisplay display && e.OldValue == null && e.NewValue != null)
-            display.ResetView();
+        base.OnMouseWheel(e);
+
+        int index = Array.FindIndex(ZoomPresetsNm, preset => Math.Abs(preset - _mapRangeNm) < 0.1);
+        if (index < 0)
+            index = Array.FindIndex(ZoomPresetsNm, preset => preset >= _mapRangeNm);
+        if (index < 0)
+            index = ZoomPresetsNm.Length - 1;
+
+        int nextIndex = e.Delta > 0
+            ? Math.Max(0, index - 1)
+            : Math.Min(ZoomPresetsNm.Length - 1, index + 1);
+
+        SetMapRange(ZoomPresetsNm[nextIndex]);
+        e.Handled = true;
+    }
+
+    protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonDown(e);
+
+        if (Snapshot == null || ActualWidth < 10 || ActualHeight < 10)
+            return;
+
+        var mapRect = new Rect(18, 18, Math.Max(10, ActualWidth - 36), Math.Max(10, ActualHeight - 36));
+        var click = e.GetPosition(this);
+        string? nearestTrack = null;
+        double nearestDistance = 16;
+
+        foreach (var track in Snapshot.AllTracks)
+        {
+            Point point = GetMapPoint(mapRect, track.Position, _mapRangeNm);
+            double distance = (point - click).Length;
+            if (distance < nearestDistance)
+            {
+                nearestDistance = distance;
+                nearestTrack = track.TrackId;
+            }
+        }
+
+        if (nearestTrack != null)
+        {
+            TrackClicked?.Invoke(nearestTrack);
+            e.Handled = true;
+        }
+    }
+
+    public void ZoomIn() => StepZoom(-1);
+
+    public void ZoomOut() => StepZoom(1);
+
+    public void ResetZoom() => SetMapRange(180);
+
+    private void StepZoom(int delta)
+    {
+        int index = Array.FindIndex(ZoomPresetsNm, preset => Math.Abs(preset - _mapRangeNm) < 0.1);
+        if (index < 0)
+            index = Array.FindIndex(ZoomPresetsNm, preset => preset >= _mapRangeNm);
+        if (index < 0)
+            index = ZoomPresetsNm.Length - 1;
+
+        int nextIndex = Math.Clamp(index + delta, 0, ZoomPresetsNm.Length - 1);
+        SetMapRange(ZoomPresetsNm[nextIndex]);
+    }
+
+    private void SetMapRange(double rangeNm)
+    {
+        if (Math.Abs(_mapRangeNm - rangeNm) < 0.1)
+            return;
+
+        _mapRangeNm = rangeNm;
+        MapZoomChanged?.Invoke(_mapRangeNm);
+        InvalidateVisual();
+    }
+
+    private static Brush CreateFrozenBrush(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
+
+    private static Pen CreateFrozenPen(Color color, double thickness)
+    {
+        var pen = new Pen(CreateFrozenBrush(color), thickness);
+        pen.Freeze();
+        return pen;
+    }
+
+    private static Typeface ResolveTypeface(FontWeight weight) =>
+        weight == FontWeights.Bold
+            ? MapTypefaceBold
+            : weight == FontWeights.SemiBold
+                ? MapTypefaceSemiBold
+                : MapTypeface;
+
+    private void InvalidateTerrainCache()
+    {
+        _cachedTerrainRect = Rect.Empty;
+        _cachedRidgeGeometry = null;
+        _cachedRiverGeometry = null;
+    }
+
+    private void EnsureTerrainCache(Rect rect)
+    {
+        if (_cachedRidgeGeometry != null && _cachedRiverGeometry != null && _cachedTerrainRect == rect)
+            return;
+
+        _cachedTerrainRect = rect;
+
+        var ridge = new StreamGeometry();
+        using (var ctx = ridge.Open())
+        {
+            ctx.BeginFigure(new Point(rect.Left + 20, rect.Top + rect.Height * 0.28), false, false);
+            ctx.PolyLineTo(
+                [
+                    new Point(rect.Left + rect.Width * 0.22, rect.Top + rect.Height * 0.18),
+                    new Point(rect.Left + rect.Width * 0.42, rect.Top + rect.Height * 0.24),
+                    new Point(rect.Left + rect.Width * 0.58, rect.Top + rect.Height * 0.15),
+                    new Point(rect.Left + rect.Width * 0.84, rect.Top + rect.Height * 0.2),
+                    new Point(rect.Right - 22, rect.Top + rect.Height * 0.12)
+                ],
+                true,
+                true);
+        }
+        ridge.Freeze();
+        _cachedRidgeGeometry = ridge;
+
+        var river = new StreamGeometry();
+        using (var ctx = river.Open())
+        {
+            ctx.BeginFigure(new Point(rect.Left + rect.Width * 0.13, rect.Bottom - 16), false, false);
+            ctx.BezierTo(
+                new Point(rect.Left + rect.Width * 0.18, rect.Top + rect.Height * 0.68),
+                new Point(rect.Left + rect.Width * 0.36, rect.Top + rect.Height * 0.54),
+                new Point(rect.Left + rect.Width * 0.48, rect.Top + rect.Height * 0.48),
+                true,
+                true);
+            ctx.BezierTo(
+                new Point(rect.Left + rect.Width * 0.64, rect.Top + rect.Height * 0.4),
+                new Point(rect.Left + rect.Width * 0.74, rect.Top + rect.Height * 0.22),
+                new Point(rect.Right - 28, rect.Top + rect.Height * 0.08),
+                true,
+                true);
+        }
+        river.Freeze();
+        _cachedRiverGeometry = river;
     }
 }

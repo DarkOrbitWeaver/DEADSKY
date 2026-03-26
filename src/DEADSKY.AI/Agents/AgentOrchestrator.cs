@@ -14,6 +14,7 @@ namespace DEADSKY.AI.Agents;
 /// </summary>
 public abstract class AgentBase
 {
+    private const int ToolResultPreviewChars = 900;
     protected readonly AIModelClient _client;
     protected readonly ToolRegistry _tools;
     protected readonly List<ChatMessage> _history = new();
@@ -40,6 +41,13 @@ public abstract class AgentBase
         SimulationSnapshot snapshot,
         string userContext,
         IReadOnlyList<ToolDefinition>? toolSubset = null,
+        bool requireStructuredReply = false,
+        double replyTemperature = 0.25,
+        int replyMaxTokens = 96,
+        bool finalReplyRequired = true,
+        bool resetHistory = true,
+        int planningMaxTokens = 96,
+        int followUpMaxTokens = 80,
         CancellationToken ct = default)
     {
         if (IsRunning) return "";
@@ -51,19 +59,35 @@ public abstract class AgentBase
             var systemPrompt = BuildSystemPrompt(snapshot);
             var tools = (toolSubset ?? _tools.AllTools).ToList();
 
+            if (resetHistory)
+                _history.Clear();
+
             // Add user context to history
             _history.Add(ChatMessage.User(userContext));
             TrimHistory();
 
             string finalText = "";
             bool usedTools = false;
-            var response = await _client.ChatAsync(systemPrompt, _history, tools, ct: ct);
+            var response = await _client.ChatAsync(systemPrompt, _history, tools, maxTokens: planningMaxTokens, ct: ct);
 
             if (!response.IsError)
             {
                 if (!response.HasToolCalls)
                 {
-                    finalText = response.TextContent;
+                    if (requireStructuredReply)
+                    {
+                        finalText = await _client.GetStructuredReplyForMessagesAsync(
+                            systemPrompt,
+                            _history,
+                            temperature: replyTemperature,
+                            maxTokens: replyMaxTokens,
+                            ct: ct);
+                    }
+                    else if (finalReplyRequired)
+                    {
+                        finalText = response.TextContent;
+                    }
+
                     if (!string.IsNullOrEmpty(finalText))
                         _history.Add(ChatMessage.Assistant(finalText));
                 }
@@ -74,19 +98,35 @@ public abstract class AgentBase
                     foreach (var toolCall in response.ToolCalls)
                     {
                         var result = await _tools.ExecuteAsync(toolCall);
-                        _history.Add(ChatMessage.ToolResult(toolCall.Id, result));
+                        _history.Add(ChatMessage.ToolResult(toolCall.Id, CompactToolResult(result)));
                     }
 
-                    // LM Studio's recommended OpenAI-compatible flow is:
-                    // first call with tools, then feed tool results back without tools enabled
-                    // so the model returns a final assistant response instead of continuing tool loops.
-                    var followUp = await _client.ChatAsync(systemPrompt, _history, tools: null, ct: ct);
-                    if (!followUp.IsError)
+                    if (requireStructuredReply)
                     {
-                        finalText = followUp.TextContent;
-                        if (!string.IsNullOrWhiteSpace(finalText))
-                            _history.Add(ChatMessage.Assistant(finalText));
+                        finalText = await _client.GetStructuredReplyForMessagesAsync(
+                            systemPrompt,
+                            _history,
+                            temperature: replyTemperature,
+                            maxTokens: replyMaxTokens,
+                            ct: ct);
                     }
+                    else if (finalReplyRequired)
+                    {
+                        // LM Studio's recommended OpenAI-compatible flow is:
+                        // first call with tools, then feed tool results back without tools enabled
+                        // so the model returns a final assistant response instead of continuing tool loops.
+                        var followUp = await _client.ChatAsync(
+                            systemPrompt,
+                            _history,
+                            tools: null,
+                            maxTokens: followUpMaxTokens,
+                            ct: ct);
+                        if (!followUp.IsError)
+                            finalText = followUp.TextContent;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(finalText))
+                        _history.Add(ChatMessage.Assistant(finalText));
                 }
             }
 
@@ -104,6 +144,14 @@ public abstract class AgentBase
 
     public void ClearHistory() => _history.Clear();
 
+    protected static string CompactToolResult(string result)
+    {
+        if (string.IsNullOrWhiteSpace(result) || result.Length <= ToolResultPreviewChars)
+            return result;
+
+        return result[..ToolResultPreviewChars].TrimEnd() + " ...[truncated]";
+    }
+
     protected static string NormalizeRadioReply(string? text, int maxWords = 22)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -112,10 +160,6 @@ public abstract class AgentBase
         string compact = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).Trim();
         if (compact.Length == 0)
             return string.Empty;
-
-        int sentenceBreak = compact.IndexOfAny(new[] { '.', '!', '?' });
-        if (sentenceBreak >= 0 && sentenceBreak < compact.Length - 1)
-            compact = compact[..(sentenceBreak + 1)].Trim();
 
         var words = compact.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (words.Length <= maxWords)
@@ -161,7 +205,12 @@ public class EnemyCommanderAgent : AgentBase
         if (_timeSinceLastRun >= _tickInterval && !IsRunning)
         {
             _timeSinceLastRun = 0;
-            _ = RunAsync(snapshot, BuildUserContext(snapshot), _tools.EnemyCommanderTools);
+            _ = RunAsync(
+                snapshot,
+                BuildUserContext(snapshot),
+                _tools.EnemyCommanderTools,
+                finalReplyRequired: false,
+                planningMaxTokens: 96);
         }
     }
 
@@ -178,7 +227,8 @@ TACTICAL RULES:
 - Coordinate groups to attack from multiple axes simultaneously.
 - If aircraft are being shot at, tell them to evade or change flight path.
 - Respect doctrine rules. Use only tactics, behaviors, and radio traffic that fit the package role and current morale state.
-- You can ONLY affect the simulation by calling tools. Think step-by-step, then call tools.
+- You can ONLY affect the simulation by calling tools.
+- Do not emit long analysis or internal reasoning as plain text; call the needed tools directly.
 - Stay at commander level. Choose package tactic, timing, reinforcement, support requests, and radio intent.
 - Do not try to hand-fly aircraft, set per-aircraft headings, or micromanage ECM state.
 - Do not make up aircraft that don't exist in the contact list.
@@ -258,7 +308,7 @@ Reply as ECHO ACTUAL with one short radio transmission.";
                 BuildPlayerReplyPrompt(),
                 prompt,
                 temperature: 0.25,
-                maxTokens: 72);
+                maxTokens: 56);
 
             response = NormalizeRadioReply(response, maxWords: 18);
             if (string.IsNullOrWhiteSpace(response))
@@ -303,7 +353,8 @@ Issue orders when appropriate. Escalate ROE when warranted.
 
 Friendly support actors available: {(_friendlySupport == null ? "no support board loaded" : _friendlySupport.BuildStatusBoard())}
 
-Use tools to send messages as ECHO ACTUAL, update ROE, set alert levels, request support actions, and log events.";
+Use tools to gather data, update ROE, set alert levels, request support actions, and log events.
+If a separate final reply is requested, do not call send_radio_message; that transmission will be handled automatically.";
     }
 
     private static string BuildPlayerReplyPrompt() =>
@@ -319,12 +370,31 @@ Rules:
     private string BuildPeriodicContext(SimulationSnapshot snapshot) =>
         $"Send a brief SITREP to ALPHA ACTUAL. Time: {snapshot.GameTimeString}. " +
         $"Hostile contacts: {snapshot.HostileTracks.Count}. " +
-        $"Situation assessment and any orders.";
+        $"Situation assessment and any orders. " +
+        "Use only information-gathering tools. Do not call send_radio_message; the final transmission will be sent automatically.";
+
+    private IReadOnlyList<ToolDefinition> GetSitrepTools() => _tools.GetToolsByName(
+    [
+        "get_radar_contacts",
+        "get_contact_details",
+        "get_threat_assessment",
+        "get_support_status",
+        "get_battery_status",
+        "get_engagement_history"
+    ]);
 
     private async Task SendPeriodicSitrepAsync(SimulationSnapshot snapshot)
     {
-        var response = await RunAsync(snapshot, BuildPeriodicContext(snapshot));
-        if (!LastRunUsedTools && !string.IsNullOrWhiteSpace(response))
+        var response = await RunAsync(
+            snapshot,
+            BuildPeriodicContext(snapshot),
+            toolSubset: GetSitrepTools(),
+            requireStructuredReply: true,
+            replyTemperature: 0.2,
+            replyMaxTokens: 72,
+            planningMaxTokens: 64);
+        response = NormalizeRadioReply(response, maxWords: 24);
+        if (!string.IsNullOrWhiteSpace(response))
         {
             _tools.Simulation.Comms.Queue(CommManager.CreateAlliedHQMessage(
                 response.Trim(),
@@ -362,8 +432,17 @@ public class IntelligenceAgent : AgentBase
     public async Task OnNewContactDetected(string trackId, SimulationSnapshot snapshot)
     {
         if (IsRunning) return;
-        var response = await RunAsync(snapshot, $"New contact detected: {trackId}. Provide brief intel assessment.");
-        if (!LastRunUsedTools && !string.IsNullOrWhiteSpace(response))
+        var response = await RunAsync(
+            snapshot,
+            $"New contact detected: {trackId}. Provide brief intel assessment. " +
+            "Use only information-gathering tools. Do not call send_radio_message; the final transmission will be sent automatically.",
+            toolSubset: GetIntelAssessmentTools(),
+            requireStructuredReply: true,
+            replyTemperature: 0.2,
+            replyMaxTokens: 64,
+            planningMaxTokens: 56);
+        response = NormalizeRadioReply(response, maxWords: 22);
+        if (!string.IsNullOrWhiteSpace(response))
             _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response.Trim()));
     }
 
@@ -389,7 +468,7 @@ Reply as INTEL-1 with one concise assessment or warning.";
                 BuildDirectIntelPrompt(),
                 prompt,
                 temperature: 0.2,
-                maxTokens: 72);
+                maxTokens: 56);
 
             response = NormalizeRadioReply(response, maxWords: 20);
             if (string.IsNullOrWhiteSpace(response))
@@ -410,8 +489,16 @@ You analyze radar data and provide tactical intelligence assessments.
 Your tone: analytical, precise. Use hedged language ('probable', 'assess', 'indicate').
 Keep messages brief and actionable.
 
-Use send_radio_message on the intel channel to deliver your reports to ALPHA.
-Use get_radar_contacts and get_threat_assessment first to inform your analysis.";
+Use tools to gather contact and threat data before reporting.
+If a separate final reply is requested, do not call send_radio_message; that transmission will be handled automatically.";
+
+    private IReadOnlyList<ToolDefinition> GetIntelAssessmentTools() => _tools.GetToolsByName(
+    [
+        "get_radar_contacts",
+        "get_contact_details",
+        "get_threat_assessment",
+        "get_engagement_history"
+    ]);
 
     private static string BuildDirectIntelPrompt() =>
         @"You are INTEL-1 on military radio.
@@ -426,8 +513,15 @@ Rules:
     private async Task SendPeriodicIntelUpdateAsync(SimulationSnapshot snapshot)
     {
         var response = await RunAsync(snapshot,
-            "Provide a current intelligence update based on radar contacts and engagement history.");
-        if (!LastRunUsedTools && !string.IsNullOrWhiteSpace(response))
+            "Provide a current intelligence update based on radar contacts and engagement history. " +
+            "Use only information-gathering tools. Do not call send_radio_message; the final transmission will be sent automatically.",
+            toolSubset: GetIntelAssessmentTools(),
+            requireStructuredReply: true,
+            replyTemperature: 0.2,
+            replyMaxTokens: 72,
+            planningMaxTokens: 64);
+        response = NormalizeRadioReply(response, maxWords: 24);
+        if (!string.IsNullOrWhiteSpace(response))
             _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response.Trim()));
     }
 }
@@ -451,7 +545,7 @@ public class CrewPersonalityAgent : AgentBase
         SimulationSnapshot snapshot, CancellationToken ct = default)
     {
         string prompt = $"Soldier: {soldierName}\nPersonality: {personality}\nSituation: {situation}\n\nWrite ONE radio line (1-2 sentences max). Stay in character. No quotes around it.";
-        var response = await _client.GetTextAsync(BuildSystemPrompt(snapshot), prompt, temperature: 0.7, maxTokens: 56, ct: ct);
+        var response = await _client.GetTextAsync(BuildSystemPrompt(snapshot), prompt, temperature: 0.7, maxTokens: 40, ct: ct);
         return NormalizeRadioReply(response, maxWords: 16);
     }
 
@@ -469,6 +563,7 @@ public class CrewPersonalityAgent : AgentBase
 /// </summary>
 public class AgentOrchestrator
 {
+    private static readonly TimeSpan InteractivePriorityWindow = TimeSpan.FromSeconds(8);
     public EnemyCommanderAgent EnemyCommander { get; }
     public AlliedHQAgent AlliedHQ { get; }
     public IntelligenceAgent Intel { get; }
@@ -476,6 +571,7 @@ public class AgentOrchestrator
 
     private readonly AIModelClient _client;
     private bool _aiAvailable = true;
+    private DateTime _backgroundCooldownUntilUtc = DateTime.MinValue;
 
     public bool AIAvailable => _aiAvailable;
 
@@ -496,15 +592,21 @@ public class AgentOrchestrator
     public void Tick(double deltaTime, SimulationSnapshot snapshot)
     {
         if (!_aiAvailable) return;
+        if (_client.IsBusy || DateTime.UtcNow < _backgroundCooldownUntilUtc) return;
 
         EnemyCommander.Tick(deltaTime, snapshot);
+        if (EnemyCommander.IsRunning || _client.IsBusy) return;
+
         AlliedHQ.Tick(deltaTime, snapshot);
+        if (AlliedHQ.IsRunning || _client.IsBusy) return;
+
         Intel.Tick(deltaTime, snapshot);
     }
 
     public async Task HandlePlayerMessageAsync(RadioChannel channel, string message, SimulationSnapshot snapshot)
     {
         if (!_aiAvailable) return;
+        PauseBackgroundAgents();
 
         switch (channel)
         {
@@ -515,11 +617,16 @@ public class AgentOrchestrator
                 await Intel.RespondToPlayerQuery(message, snapshot);
                 break;
         }
+
+        PauseBackgroundAgents();
     }
 
     public async Task HandleNewContactAsync(string trackId, SimulationSnapshot snapshot)
     {
         if (!_aiAvailable) return;
+        if (_client.IsBusy || DateTime.UtcNow < _backgroundCooldownUntilUtc || Intel.IsRunning)
+            return;
+
         await Intel.OnNewContactDetected(trackId, snapshot);
     }
 
@@ -528,5 +635,12 @@ public class AgentOrchestrator
     {
         _aiAvailable = await _client.PingAsync();
         return _aiAvailable;
+    }
+
+    private void PauseBackgroundAgents()
+    {
+        var until = DateTime.UtcNow + InteractivePriorityWindow;
+        if (until > _backgroundCooldownUntilUtc)
+            _backgroundCooldownUntilUtc = until;
     }
 }

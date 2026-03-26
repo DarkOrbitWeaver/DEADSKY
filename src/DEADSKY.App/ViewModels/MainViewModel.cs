@@ -67,6 +67,10 @@ public partial class MainViewModel : ObservableObject
     private readonly object _uiTickSync = new();
     private SimulationSnapshot? _pendingUiSnapshot;
     private bool _uiTickUpdateQueued;
+    private double _lastCrewRefreshGameTimeSec = double.NegativeInfinity;
+    private double _lastSupportDisplayRefreshGameTimeSec = double.NegativeInfinity;
+    private const double CrewRefreshIntervalSec = 0.5;
+    private const double SupportDisplayRefreshIntervalSec = 0.5;
 
     // â”€â”€ Observable state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     [ObservableProperty] private SimulationSnapshot? _currentSnapshot;
@@ -91,6 +95,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _selectedTrackObjectiveText = "OBJECTIVE: STANDBY";
     [ObservableProperty] private string _selectedTrackDoctrineText = "DOCTRINE: NO TRACK SELECTED.";
     [ObservableProperty] private string _selectedTrackStatusText = "STATUS: STANDBY";
+    [ObservableProperty] private string _selectedTrackMissionText = "MISSION: ---";
+    [ObservableProperty] private string _selectedTrackControlText = "CONTROL: ---";
+    [ObservableProperty] private string _selectedTrackKinematicsText = "KINEMATICS: ---";
     [ObservableProperty] private string _selectedTrackTimeToThreatText = "TIME TO THREAT: ---";
     [ObservableProperty] private string _radarCursorReadout = "CURSOR BRAA: ---";
     [ObservableProperty] private string _weatherSummary = "WX CLR | VIS 80NM | CEIL 25000FT";
@@ -122,6 +129,11 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _radarCommsText = "COMMS GREEN";
     [ObservableProperty] private string _radarRangeStatusText = "RANGE 080NM";
     [ObservableProperty] private string _radarSweepText = "SWEEP 000";
+    [ObservableProperty] private string _trackHoldStatusText = "TRACK HOLD 0";
+    [ObservableProperty] private bool _autoFocusSelectedTrack = true;
+    [ObservableProperty] private bool _showRadarAltitudeLabels = true;
+    [ObservableProperty] private bool _showRadarTrackTrails = true;
+    [ObservableProperty] private bool _showTacticalMapLabels = true;
 
     // Alert level color (bound to header)
     [ObservableProperty] private string _alertColor = "#FFC800";
@@ -153,6 +165,9 @@ public partial class MainViewModel : ObservableObject
     public string MenuButtonText => IsCommandMenuOpen ? "CLOSE MENU" : "OPS MENU";
     public string SelectedTrackPanelTitle => SelectedTrackId == null ? "TRACK CONTROL" : $"TRACK {SelectedTrackId}";
     public string EngagementActionHintText => AssessFireControlState(Sim.LatestSnapshot.Battery, SelectedTrack).HintText;
+    public string TrackHoldButtonText => SelectedTrack?.IsTrackHeld == true || SelectedTrack?.IsDesignated == true
+        ? "TRACK HELD"
+        : "HOLD TRACK";
     public string MissionPrimaryActionText => MissionLifecycle switch
     {
         MissionLifecycleState.Briefing => "ENTER STATION",
@@ -236,6 +251,10 @@ public partial class MainViewModel : ObservableObject
         bool available = await AI.CheckAvailabilityAsync();
         AiAvailable = available;
         AiStatusColor = available ? "#00DC00" : "#FFC800";
+        RefreshCommandStates();
+        RefreshDerivedBindings();
+        if (!available)
+            SetStatus("LM STUDIO MODEL NOT READY");
 
         // Hook AI into sim tick
         Sim.OnTickForAI = snapshot => AI.Tick(0.1, snapshot);
@@ -315,9 +334,11 @@ public partial class MainViewModel : ObservableObject
 
         AiAvailable = await AI.CheckAvailabilityAsync();
         AiStatusColor = AiAvailable ? "#00DC00" : "#FFC800";
+        RefreshCommandStates();
+        RefreshDerivedBindings();
         SetStatus(AiAvailable
-            ? "DYNAMIC DIRECTOR READY"
-            : "DYNAMIC DIRECTOR UNAVAILABLE");
+            ? "LM STUDIO MODEL READY"
+            : "LM STUDIO MODEL NOT READY");
     }
 
     [RelayCommand]
@@ -338,8 +359,8 @@ public partial class MainViewModel : ObservableObject
     {
         if (AI == null || !AiAvailable)
         {
-            RealisticModeSummary = "DYNAMIC SHIFT: director unavailable. Stay on scripted operations for now.";
-            SetStatus("DYNAMIC SHIFT UNAVAILABLE");
+            RealisticModeSummary = "DYNAMIC SHIFT: LM Studio model not ready. Load the model before generating a live operation.";
+            SetStatus("LM STUDIO MODEL REQUIRED");
             RefreshDerivedBindings();
             return;
         }
@@ -352,7 +373,7 @@ public partial class MainViewModel : ObservableObject
 
             var generator = new RealisticScenarioGenerator(_aiClient);
             string theaterContext = BuildRealisticModeContext();
-            var result = await generator.GenerateAsync(theaterContext, allowFallback: true);
+            var result = await generator.GenerateAsync(theaterContext, allowFallback: false);
 
             if (result == null || result.Scenario == null)
             {
@@ -367,11 +388,10 @@ public partial class MainViewModel : ObservableObject
             }
 
             LoadScenarioDefinition(result.Scenario, isRealisticMode: true);
-            string fallbackTag = result.UsedFallback ? " FALLBACK APPLIED." : string.Empty;
             string warningTag = result.ValidationErrors.Count > 0
                 ? $" FIXUPS: {string.Join(" | ", result.ValidationErrors)}"
                 : string.Empty;
-            RealisticModeSummary = $"DYNAMIC SHIFT: {result.Validation.Summary}. {result.Summary}{fallbackTag}{warningTag}";
+            RealisticModeSummary = $"DYNAMIC SHIFT: {result.Validation.Summary}. {result.Summary}{warningTag}";
             SetStatus($"DYNAMIC SHIFT LOADED: {result.Scenario.Name}");
             RefreshDerivedBindings();
         }
@@ -389,6 +409,13 @@ public partial class MainViewModel : ObservableObject
         if (MissionLifecycle == MissionLifecycleState.Active)
             return;
 
+        if (!IsAiReady())
+        {
+            SetStatus("LM STUDIO MODEL REQUIRED");
+            IsCommandMenuOpen = true;
+            return;
+        }
+
         Sim.Start();
         SetMissionLifecycle(MissionLifecycleState.Active);
         IsCommandMenuOpen = false;
@@ -399,6 +426,7 @@ public partial class MainViewModel : ObservableObject
 
     private bool CanStartMission() =>
         CurrentSnapshot != null &&
+        AiAvailable &&
         MissionLifecycle is MissionLifecycleState.Briefing or MissionLifecycleState.Standby or MissionLifecycleState.Paused;
 
     [RelayCommand(CanExecute = nameof(CanPauseMission))]
@@ -457,6 +485,49 @@ public partial class MainViewModel : ObservableObject
     }
 
     private bool CanDesignate() => SelectedTrackId != null && SimulationRunning;
+
+    [RelayCommand(CanExecute = nameof(CanHoldSelectedTrack))]
+    public void ToggleTrackHoldSelected()
+    {
+        if (SelectedTrackId == null)
+            return;
+
+        bool ok = Sim.PlayerToggleTrackHold(SelectedTrackId);
+        RefreshFromSimulationSnapshot();
+        if (ok)
+        {
+            bool isHeld = SelectedTrack?.IsTrackHeld == true || SelectedTrack?.IsDesignated == true;
+            SetStatus(isHeld ? $"TRACK HELD: {SelectedTrackId}" : $"TRACK MEMORY CLEARED: {SelectedTrackId}");
+            Audio.Play(SoundEvent.UiButtonPress);
+        }
+
+        RefreshDerivedBindings();
+    }
+
+    private bool CanHoldSelectedTrack() => SelectedTrackId != null && SimulationRunning;
+
+    [RelayCommand(CanExecute = nameof(CanReleaseSelectedTrack))]
+    public void ReleaseSelectedTrack()
+    {
+        if (SelectedTrackId == null)
+            return;
+
+        bool ok = Sim.PlayerReleaseTrack(SelectedTrackId);
+        RefreshFromSimulationSnapshot();
+        if (ok)
+        {
+            SetStatus($"TRACK RELEASED: {SelectedTrackId}");
+            Audio.Play(SoundEvent.UiButtonPress);
+        }
+
+        RefreshDerivedBindings();
+    }
+
+    private bool CanReleaseSelectedTrack() =>
+        SelectedTrackId != null &&
+        SimulationRunning &&
+        SelectedTrack != null &&
+        (SelectedTrack.IsTrackHeld || SelectedTrack.IsDesignated);
 
     [RelayCommand(CanExecute = nameof(CanFire))]
     public void FireSingle()
@@ -547,7 +618,15 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     public void SetRadarRange(double rangeNm)
     {
+        double currentRange = Sim.LatestSnapshot.RadarRangeNm;
         double normalizedRange = SimulationEngine.NormalizeRadarRange(rangeNm);
+        if (Math.Abs(normalizedRange - currentRange) < 0.1)
+        {
+            SetStatus($"RADAR RANGE {currentRange:F0} NM");
+            RefreshDerivedBindings();
+            return;
+        }
+
         Sim.PlayerSetRadarRange(normalizedRange);
         RefreshFromSimulationSnapshot();
         SetStatus($"RADAR RANGE SET {Sim.LatestSnapshot.RadarRangeNm:F0} NM");
@@ -568,6 +647,12 @@ public partial class MainViewModel : ObservableObject
     public async Task SendMessage()
     {
         if (string.IsNullOrWhiteSpace(InputMessage)) return;
+        if (!IsAiReady())
+        {
+            SetStatus("LM STUDIO MODEL REQUIRED");
+            return;
+        }
+
         await SendPlayerRadioAsync(ActiveChannel, InputMessage.Trim());
         InputMessage = "";
     }
@@ -575,6 +660,12 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanSendQuickCommand))]
     public async Task SendQuickCommand(string commandKey)
     {
+        if (!IsAiReady())
+        {
+            SetStatus("LM STUDIO MODEL REQUIRED");
+            return;
+        }
+
         var route = BuildQuickCommand(commandKey);
         if (route.Message.Length == 0)
         {
@@ -587,12 +678,12 @@ public partial class MainViewModel : ObservableObject
 
     private bool CanSendQuickCommand(string? commandKey) => commandKey switch
     {
-        "ack" => true,
-        "picture" => SimulationRunning,
-        "status" => CurrentSnapshot != null,
-        "declare" => SimulationRunning && SelectedTrack != null,
-        "weapons_free" => SimulationRunning && HostileCount > 0,
-        "intel" => HostileCount > 0,
+        "ack" => AiAvailable,
+        "picture" => AiAvailable && SimulationRunning,
+        "status" => AiAvailable && CurrentSnapshot != null,
+        "declare" => AiAvailable && SimulationRunning && SelectedTrack != null,
+        "weapons_free" => AiAvailable && SimulationRunning && HostileCount > 0,
+        "intel" => AiAvailable && HostileCount > 0,
         _ => false
     };
 
@@ -640,7 +731,7 @@ public partial class MainViewModel : ObservableObject
 
     private void FocusSelectedTrackIfNeeded()
     {
-        if (SelectedTrack == null)
+        if (SelectedTrack == null || !AutoFocusSelectedTrack)
             return;
 
         double focusRange = ChooseTrackFocusRange(SelectedTrack.RangeNm);
@@ -700,8 +791,20 @@ public partial class MainViewModel : ObservableObject
 
         UpdateFromSnapshot(snapshot, isLiveTick: true);
         RefreshThreatWarnings(snapshot);
-        RefreshCrewDisplay();
-        RefreshSupportDisplay();
+
+        if (snapshot.GameTimeSec - _lastCrewRefreshGameTimeSec >= CrewRefreshIntervalSec)
+        {
+            RefreshCrewDisplay();
+            _lastCrewRefreshGameTimeSec = snapshot.GameTimeSec;
+        }
+
+        if (snapshot.GameTimeSec - _lastSupportDisplayRefreshGameTimeSec >= SupportDisplayRefreshIntervalSec)
+        {
+            RefreshSupportDisplay();
+            _lastSupportDisplayRefreshGameTimeSec = snapshot.GameTimeSec;
+        }
+
+        RefreshSupportNetworkReports(snapshot);
 
         bool shouldQueueAgain;
         lock (_uiTickSync)
@@ -738,6 +841,7 @@ public partial class MainViewModel : ObservableObject
             RadarCommsText = battery.CommsOnline ? "COMMS GREEN" : "COMMS DEGRADED";
             RadarRangeStatusText = $"RANGE {snapshot.RadarRangeNm:000}NM";
             RadarSweepText = $"SWEEP {snapshot.RadarSweepAngle:000}";
+            TrackHoldStatusText = $"TRACK HOLD {snapshot.AllTracks.Count(track => track.IsTrackHeld || track.IsDesignated)}";
             AlertColor = battery.AlertLevel switch
             {
                 BatteryAlertLevel.Green => "#00B400",
@@ -1015,6 +1119,12 @@ public partial class MainViewModel : ObservableObject
 
     private async Task SendPlayerRadioAsync(RadioChannel channel, string content)
     {
+        if (!IsAiReady())
+        {
+            SetStatus("LM STUDIO MODEL REQUIRED");
+            return;
+        }
+
         int repliesBefore = GetReplyCount(channel);
         ActiveChannel = channel;
         var msg = Sim.PlayerSendMessage(channel, content, GetDefaultRecipientCallsign(channel));
@@ -1033,14 +1143,7 @@ public partial class MainViewModel : ObservableObject
         FlushPendingRadioTraffic();
 
         if (GetReplyCount(channel) == repliesBefore)
-        {
-            var fallback = RadioActionRouter.BuildFallbackReply(channel, content, Sim.LatestSnapshot, CurrentScenarioDefinition);
-            if (fallback != null)
-            {
-                Sim.Comms.Queue(fallback);
-                FlushPendingRadioTraffic();
-            }
-        }
+            SetStatus($"NO LM STUDIO REPLY ON {channel.ToString().ToUpper()}");
     }
 
     private (RadioChannel Channel, string Message) BuildQuickCommand(string commandKey) => commandKey switch
@@ -1072,6 +1175,9 @@ public partial class MainViewModel : ObservableObject
             SelectedTrackObjectiveText = "OBJECTIVE: STANDBY";
             SelectedTrackDoctrineText = "DOCTRINE: NO TRACK SELECTED.";
             SelectedTrackStatusText = "STATUS: STANDBY";
+            SelectedTrackMissionText = "MISSION: ---";
+            SelectedTrackControlText = "CONTROL: ---";
+            SelectedTrackKinematicsText = "KINEMATICS: ---";
             SelectedTrackTimeToThreatText = "TIME TO THREAT: ---";
             SelectedTrackEnvelopeText = "FIRE CONTROL: STANDBY";
             return;
@@ -1086,9 +1192,12 @@ public partial class MainViewModel : ObservableObject
         SelectedTrackRoleText = doctrine.RoleLabel;
         SelectedTrackObjectiveText = doctrine.ObjectiveLabel;
         SelectedTrackDoctrineText = doctrine.DoctrineLabel;
-        SelectedTrackStatusText = $"STATUS: {advisory.StateLabel} | {advisory.TagsText}";
-        SelectedTrackTimeToThreatText = advisory.TimeToThreatText;
         var fireControl = AssessFireControlState(Sim.LatestSnapshot.Battery, SelectedTrack);
+        SelectedTrackStatusText = $"STATUS: {advisory.StateLabel} | {advisory.TagsText}";
+        SelectedTrackMissionText = $"MISSION: {TrimPrefix(doctrine.PackageLabel)} | {TrimPrefix(doctrine.RoleLabel)} | {TrimPrefix(doctrine.ObjectiveLabel)}";
+        SelectedTrackControlText = $"CONTROL: {BuildTrackRetentionLabel(SelectedTrack)} | {fireControl.FireStatusText} | {TrimPrefix(advisory.TimeToThreatText, "TIME TO THREAT: ")}";
+        SelectedTrackKinematicsText = $"KINEMATICS: ALT {SelectedTrack.AltitudeFt / 1000:0.0}KFT | SPD {SelectedTrack.SpeedKts:0}KT | UNC {SelectedTrack.PositionUncertaintyM / 1000:0.0}KM";
+        SelectedTrackTimeToThreatText = advisory.TimeToThreatText;
         SelectedTrackEnvelopeText = $"FIRE CONTROL: {fireControl.FireStatusText} | {fireControl.LockStatusText} | {fireControl.RangeStatusText}";
     }
 
@@ -1097,6 +1206,8 @@ public partial class MainViewModel : ObservableObject
         StartMissionCommand.NotifyCanExecuteChanged();
         PauseMissionCommand.NotifyCanExecuteChanged();
         DesignateSelectedCommand.NotifyCanExecuteChanged();
+        ToggleTrackHoldSelectedCommand.NotifyCanExecuteChanged();
+        ReleaseSelectedTrackCommand.NotifyCanExecuteChanged();
         FireSingleCommand.NotifyCanExecuteChanged();
         FireSalvoCommand.NotifyCanExecuteChanged();
         SendQuickCommandCommand.NotifyCanExecuteChanged();
@@ -1131,6 +1242,9 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(MenuButtonText));
         OnPropertyChanged(nameof(SelectedTrackPanelTitle));
         OnPropertyChanged(nameof(EngagementActionHintText));
+        OnPropertyChanged(nameof(TrackHoldButtonText));
+        OnPropertyChanged(nameof(HasSelectedTrack));
+        OnPropertyChanged(nameof(TrackSelectionPromptText));
         OnPropertyChanged(nameof(TargetLockStatusText));
         OnPropertyChanged(nameof(FireControlStatusText));
         OnPropertyChanged(nameof(RangeEnvelopeStatusText));
@@ -1138,6 +1252,7 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(BatteryLaunchStatusText));
         OnPropertyChanged(nameof(FireControlHeadlineText));
         OnPropertyChanged(nameof(FireControlSummaryText));
+        OnPropertyChanged(nameof(FireControlDetailText));
         OnPropertyChanged(nameof(FireControlSupportText));
         OnPropertyChanged(nameof(MissionPrimaryActionText));
         OnPropertyChanged(nameof(MissionPauseHintText));
@@ -1156,6 +1271,7 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CurrentScenarioDefinition));
         OnPropertyChanged(nameof(CurrentChannelMessages));
         OnPropertyChanged(nameof(SupportStatusBoard));
+        OnPropertyChanged(nameof(SupportActivitySummaryText));
         OnPropertyChanged(nameof(VisibleSupportPictureText));
         OnPropertyChanged(nameof(ScenarioContractStatusText));
         OnPropertyChanged(nameof(RadioRulesSummaryText));
@@ -1167,6 +1283,9 @@ public partial class MainViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(ThreatSummaryText));
         OnPropertyChanged(nameof(EngagementActionHintText));
+        OnPropertyChanged(nameof(TrackHoldButtonText));
+        OnPropertyChanged(nameof(HasSelectedTrack));
+        OnPropertyChanged(nameof(TrackSelectionPromptText));
         OnPropertyChanged(nameof(TargetLockStatusText));
         OnPropertyChanged(nameof(FireControlStatusText));
         OnPropertyChanged(nameof(RangeEnvelopeStatusText));
@@ -1174,9 +1293,11 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(BatteryLaunchStatusText));
         OnPropertyChanged(nameof(FireControlHeadlineText));
         OnPropertyChanged(nameof(FireControlSummaryText));
+        OnPropertyChanged(nameof(FireControlDetailText));
         OnPropertyChanged(nameof(FireControlSupportText));
         OnPropertyChanged(nameof(CurrentScenarioArchetypeText));
         OnPropertyChanged(nameof(CurrentScenarioSaveTruthText));
+        OnPropertyChanged(nameof(SupportActivitySummaryText));
     }
 
     private void ResetUiForScenarioLoad()
@@ -1189,6 +1310,8 @@ public partial class MainViewModel : ObservableObject
         GuardMessages.Clear();
         AllMessagesRecent.Clear();
         PriorityOverlayMessages.Clear();
+        _supportReportDueSec.Clear();
+        _supportVisiblePackages.Clear();
         LogUnreadCount = 0;
         ResetNotificationState();
         ThreatBoardTracks.Clear();
@@ -1203,6 +1326,8 @@ public partial class MainViewModel : ObservableObject
         SelectedMessage = null;
         _shotReadyCueLatched = false;
         _lastFireControlTrackId = null;
+        _lastCrewRefreshGameTimeSec = double.NegativeInfinity;
+        _lastSupportDisplayRefreshGameTimeSec = double.NegativeInfinity;
         MissionPhaseText = "MISSION PHASE: STANDBY";
         ObjectiveStatusText = "OBJECTIVE: AWAITING BRIEFING";
         RecommendationText = "RECOMMENDATION: MAINTAIN SEARCH PATTERN";
@@ -1216,6 +1341,7 @@ public partial class MainViewModel : ObservableObject
         RadarCommsText = "COMMS GREEN";
         RadarRangeStatusText = "RANGE 080NM";
         RadarSweepText = "SWEEP 000";
+        TrackHoldStatusText = "TRACK HOLD 0";
         OpsFeed.Clear();
         RefreshRequisitionState();
         RefreshSupportDisplay();
@@ -1294,9 +1420,23 @@ public partial class MainViewModel : ObservableObject
             : $"INCOMING: {incoming.Count} VAMPIRE | NEAREST {incoming[0].RangeNm:0.0}NM";
     }
 
-    partial void OnSelectedTrackIdChanged(string? value) => RefreshDerivedBindings();
-    partial void OnSelectedTrackChanged(TrackFile? value) => RefreshDerivedBindings();
+    partial void OnSelectedTrackIdChanged(string? value)
+    {
+        RefreshDerivedBindings();
+        RefreshCommandStates();
+    }
+
+    partial void OnSelectedTrackChanged(TrackFile? value)
+    {
+        RefreshDerivedBindings();
+        RefreshCommandStates();
+    }
     partial void OnIsCommandMenuOpenChanged(bool value) => RefreshDerivedBindings();
+    partial void OnAiAvailableChanged(bool value)
+    {
+        RefreshDerivedBindings();
+        RefreshCommandStates();
+    }
     partial void OnSimulationRunningChanged(bool value)
     {
         RefreshDerivedBindings();
@@ -1305,6 +1445,12 @@ public partial class MainViewModel : ObservableObject
 
     private async Task HandleBatteryNetMessageAsync(string content)
     {
+        if (!IsAiReady())
+        {
+            SetStatus("LM STUDIO MODEL REQUIRED");
+            return;
+        }
+
         var responder = CrewRadioDirector.SelectResponder(Crew, content);
         string line = "";
 
@@ -1318,10 +1464,15 @@ public partial class MainViewModel : ObservableObject
         }
 
         if (string.IsNullOrWhiteSpace(line))
-            line = CrewRadioDirector.BuildFallbackLine(responder, content, Sim.LatestSnapshot);
+        {
+            SetStatus("NO LM STUDIO BATTERY-NET REPLY");
+            return;
+        }
 
         Sim.Comms.Queue(CommManager.CreateCrewMessage(responder.FullName, line));
     }
+
+    private bool IsAiReady() => AI != null && AiAvailable;
 
     private void LogOps(string category, string message)
     {
@@ -1341,6 +1492,28 @@ public partial class MainViewModel : ObservableObject
     private static string BuildTrackBraa(TrackFile track) =>
         $"BRAA {track.BearingDeg:000}/{track.RangeNm:0.0} ANGELS {track.AltitudeFt / 1000:0.0} {track.AspectString.ToUpper()}";
 
+    private static string BuildTrackRetentionLabel(TrackFile track) =>
+        track.IsDesignated ? "STT LOCK" :
+        track.IsTrackHeld ? "TWS HOLD" :
+        track.IsBeingEngaged ? "MISSILE SUPPORT" :
+        track.Quality == TrackQuality.Lost ? "TRACK COAST" :
+        "SEARCH TRACK";
+
+    private static string TrimPrefix(string text, string prefix = "")
+    {
+        if (string.IsNullOrWhiteSpace(prefix))
+        {
+            int separator = text.IndexOf(':');
+            return separator >= 0 && separator + 1 < text.Length
+                ? text[(separator + 1)..].Trim()
+                : text.Trim();
+        }
+
+        return text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? text[prefix.Length..].Trim()
+            : text.Trim();
+    }
+
     private static string BuildThreatBand(double threatLevel) => threatLevel switch
     {
         >= 0.7 => "HIGH THREAT",
@@ -1356,7 +1529,7 @@ public partial class MainViewModel : ObservableObject
         if (Application.Current?.Dispatcher.CheckAccess() == true)
             action();
         else
-            Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.Background, action);
+            Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.Render, action);
     }
 
     private ObservableCollection<RadioMessage> GetChannelMessages(RadioChannel channel) => channel switch
@@ -1431,6 +1604,10 @@ public partial class LauncherViewModel : ObservableObject
 
 public partial class TrackRowViewModel : ObservableObject
 {
+    private static readonly Brush HostileBrush = CreateFrozenBrush("#FF5050");
+    private static readonly Brush FriendlyBrush = CreateFrozenBrush("#3296FF");
+    private static readonly Brush UnknownBrush = CreateFrozenBrush("#FFFF50");
+
     public string TrackId { get; private set; } = "";
     [ObservableProperty] private string _designation = "";
     [ObservableProperty] private string _classification = "";
@@ -1470,7 +1647,19 @@ public partial class TrackRowViewModel : ObservableObject
             TrackClassification.Friendly => "#3296FF",
             _ => "#FFFF50"
         };
-        RowBrush = (Brush)new BrushConverter().ConvertFromString(RowColor)!;
+        RowBrush = track.Classification switch
+        {
+            TrackClassification.Hostile or TrackClassification.AssumedHostile => HostileBrush,
+            TrackClassification.Friendly => FriendlyBrush,
+            _ => UnknownBrush
+        };
+    }
+
+    private static Brush CreateFrozenBrush(string color)
+    {
+        var brush = (SolidColorBrush)new BrushConverter().ConvertFromString(color)!;
+        brush.Freeze();
+        return brush;
     }
 }
 

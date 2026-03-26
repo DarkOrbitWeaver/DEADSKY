@@ -65,14 +65,22 @@ public class WeaponsSystem
             {
                 if (missile.Guidance == GuidanceMode.SemiActiveRadar)
                 {
+                    var guidanceTrack = !string.IsNullOrWhiteSpace(target.Id)
+                        ? _tracks.GetByEntityId(target.Id)
+                        : null;
                     bool radarIlluminating = battery?.RadarOnline == true
                         && battery.RadarMode == RadarMode.SingleTargetTrack
                         && battery.DesignatedTargetId == target.Id;
+                    bool twsSupport = battery?.RadarOnline == true
+                        && battery.RadarMode == RadarMode.TrackWhileScan
+                        && guidanceTrack != null
+                        && guidanceTrack.IsTrackHeld
+                        && guidanceTrack.Quality != TrackQuality.Lost;
 
-                    if (!radarIlluminating)
-                        missile.LoseGuidance();
-                    else
+                    if (radarIlluminating || twsSupport)
                         missile.UpdateGuidance(target);
+                    else
+                        missile.UpdateGuidanceFromMemory(deltaTime);
                 }
                 else
                 {
@@ -81,7 +89,7 @@ public class WeaponsSystem
             }
             else if (!missile.HasDetonated)
             {
-                missile.LoseGuidance();
+                missile.UpdateGuidanceFromMemory(deltaTime);
             }
 
             if (missile.HasDetonated)

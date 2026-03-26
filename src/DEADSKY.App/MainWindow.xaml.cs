@@ -23,6 +23,7 @@ public partial class MainWindow : Window
         Closed += OnClosed;
         StateChanged += OnWindowStateChanged;
         RadarScope.TrackClicked += trackId => ViewModel.SelectTrack(trackId);
+        RadarScope.RangeChanged += rangeNm => ViewModel.SetRadarRange(rangeNm);
         RadarScope.RadarClicked += (bearingDeg, rangeNm) => ViewModel.SelectRadarPoint(bearingDeg, rangeNm);
         ThreatList.SelectionChanged += (_, _) =>
         {
@@ -114,6 +115,16 @@ public partial class MainWindow : Window
             case Key.D:
                 if (ViewModel.DesignateSelectedCommand.CanExecute(null))
                     ViewModel.DesignateSelected();
+                e.Handled = true;
+                break;
+            case Key.H:
+                if (ViewModel.ToggleTrackHoldSelectedCommand.CanExecute(null))
+                    ViewModel.ToggleTrackHoldSelected();
+                e.Handled = true;
+                break;
+            case Key.R:
+                if (ViewModel.ReleaseSelectedTrackCommand.CanExecute(null))
+                    ViewModel.ReleaseSelectedTrack();
                 e.Handled = true;
                 break;
             case Key.F:

@@ -67,7 +67,8 @@ public class TrackFile
     public DateTime? IFFTime { get; set; }
 
     // ── Engagement state ──────────────────────────────────────────────
-    public bool IsDesignated { get; set; }   // Player has locked this track
+    public bool IsDesignated { get; set; }   // Player has hard-locked this track
+    public bool IsTrackHeld { get; set; }    // Player is keeping this track in TWS memory
     public bool IsBeingEngaged { get; set; } // SAM in flight to this track
     public string? AssignedMissileId { get; set; }
 
@@ -83,6 +84,7 @@ public class TrackFile
     public double SpeedKts => CoordinateSystem.MpsToKts(SpeedMps);
     public bool IsHot => ClosingSpeedMps > 0; // Closing on battery
     public string AspectString => IsHot ? "HOT" : "COLD";
+    public bool HasFireControlAttention => IsDesignated || IsTrackHeld || IsBeingEngaged;
 
     /// <summary>Update track with new sensor measurement (with noise applied)</summary>
     public void UpdateWithDetection(Vec2 truePosition, double trueAlt, double trueHeading, double trueSpeed, double radarNoise)
@@ -96,6 +98,9 @@ public class TrackFile
         if (DetectionCount >= 2)
             noiseM *= 0.55;
 
+        if (IsTrackHeld)
+            noiseM *= 0.6;
+
         if (IsDesignated)
             noiseM *= 0.35;
         Vec2 noisyPos = new(
@@ -108,6 +113,7 @@ public class TrackFile
             0 => 1.0,
             1 => 0.58,
             _ when IsDesignated => 0.18,
+            _ when IsTrackHeld => 0.24,
             _ => 0.32
         };
 
@@ -115,6 +121,8 @@ public class TrackFile
             ? 1.0
             : IsDesignated
                 ? 0.22
+                : IsTrackHeld
+                    ? 0.32
                 : 0.45;
 
         Vec2 filteredPos = DetectionCount == 0
@@ -133,7 +141,7 @@ public class TrackFile
         Position = filteredPos;
         AltitudeM = trueAlt + (rng.NextDouble() * 2 - 1) * 50; // ±50m altitude noise
         AltitudeM = filteredAlt;
-        PositionUncertaintyM = Math.Max(75, noiseM * (IsDesignated ? 0.45 : 0.9));
+        PositionUncertaintyM = Math.Max(75, noiseM * (IsDesignated ? 0.45 : IsTrackHeld ? 0.65 : 0.9));
         LastDetectionTime = now;
         DetectionCount++;
         Quality = TrackQuality.Firm;
@@ -148,17 +156,29 @@ public class TrackFile
     /// <summary>Coast the track (no detection this sweep) — propagate using estimated velocity</summary>
     public void Coast(double deltaTime)
     {
+        DateTime now = DateTime.UtcNow;
         Position = Position + Velocity * deltaTime;
         AltitudeM += 0; // Maintain altitude estimate
-        PositionUncertaintyM += 200 * deltaTime; // Uncertainty grows with time
+        double uncertaintyGrowth = HasFireControlAttention ? 110 : 200;
+        PositionUncertaintyM += uncertaintyGrowth * deltaTime; // Uncertainty grows with time
 
         double ageSec = TimeSinceLastDetectionSec;
+        double firmThreshold = IsDesignated ? 24 : HasFireControlAttention ? 18 : 15;
+        double fadingThreshold = IsDesignated ? 90 : HasFireControlAttention ? 75 : 45;
         Quality = ageSec switch
         {
-            < 15 => TrackQuality.Firm,
-            < 45 => TrackQuality.Fading,
+            _ when ageSec < firmThreshold => TrackQuality.Firm,
+            _ when ageSec < fadingThreshold => TrackQuality.Fading,
             _ => TrackQuality.Lost
         };
+
+        if (HasFireControlAttention &&
+            (History.Count == 0 || (now - History[^1].Time).TotalSeconds >= 1.0))
+        {
+            History.Add(new TrackHistoryPoint(Position, AltitudeM, now));
+            if (History.Count > MaxHistory)
+                History.RemoveAt(0);
+        }
     }
 
     public void UpdateThreatAssessment()
@@ -177,6 +197,37 @@ public class TrackFile
             TimeToThreatSec = (range - engagementRangeM) / ClosingSpeedMps;
         else
             TimeToThreatSec = ClosingSpeedMps > 0 ? 0 : double.MaxValue;
+
+        double rangeThreat = Math.Clamp(1.0 - (range / CoordinateSystem.NmToMeters(65)), 0.0, 1.0);
+        double closureThreat = Math.Clamp(ClosingSpeedMps / 320.0, 0.0, 1.0);
+        double timeThreat = TimeToThreatSec == double.MaxValue
+            ? 0.0
+            : Math.Clamp(1.0 - (TimeToThreatSec / 240.0), 0.0, 1.0);
+        double classificationThreat = Classification switch
+        {
+            TrackClassification.Hostile => 1.0,
+            TrackClassification.AssumedHostile => 0.8,
+            TrackClassification.Unknown => 0.45,
+            TrackClassification.Neutral => 0.2,
+            _ => 0.0
+        };
+        double qualityPenalty = Quality switch
+        {
+            TrackQuality.Firm => 0.0,
+            TrackQuality.Fading => -0.08,
+            _ => -0.18
+        };
+        double fireControlBonus = IsBeingEngaged ? 0.08 : IsDesignated ? 0.05 : IsTrackHeld ? 0.03 : 0.0;
+
+        ThreatLevel = Math.Clamp(
+            (rangeThreat * 0.32) +
+            (closureThreat * 0.22) +
+            (timeThreat * 0.26) +
+            (classificationThreat * 0.20) +
+            qualityPenalty +
+            fireControlBonus,
+            0.0,
+            1.0);
     }
 }
 
@@ -190,6 +241,9 @@ public class TrackManager
     private int _nextTrackNumber = 1;
     private const double CorrelationRadiusM = 5000;   // 5km - same entity if within this
     private const double TrackDropTimeSec = 60.0;     // Drop track after 60s no detection
+    private const double HeldTrackDropTimeSec = 95.0;
+    private const double EngagedTrackDropTimeSec = 120.0;
+    private const double DesignatedTrackDropTimeSec = 150.0;
     private const double RadarPositionNoise = 300.0;  // meters of radar noise
 
     public event Action<TrackFile>? TrackInitiated;
@@ -271,7 +325,7 @@ public class TrackManager
                 track.UpdateThreatAssessment();
             }
 
-            if (track.TimeSinceLastDetectionSec > TrackDropTimeSec)
+            if (track.TimeSinceLastDetectionSec > GetTrackDropTimeSec(track))
                 toRemove.Add(track.TrackId);
         }
 
@@ -303,13 +357,42 @@ public class TrackManager
     public TrackFile? GetDesignatedTrack() =>
         _tracks.Values.FirstOrDefault(t => t.IsDesignated);
 
+    public IReadOnlyList<TrackFile> GetHeldTracks() =>
+        _tracks.Values.Where(t => t.IsTrackHeld || t.IsDesignated).ToList();
+
     public int TrackCount => _tracks.Count;
+    public int HeldTrackCount => _tracks.Values.Count(t => t.IsTrackHeld || t.IsDesignated);
 
     public void DesignateTrack(string trackId)
     {
         foreach (var t in _tracks.Values) t.IsDesignated = false;
         if (_tracks.TryGetValue(trackId, out var track))
+        {
             track.IsDesignated = true;
+            track.IsTrackHeld = true;
+        }
+    }
+
+    public bool HoldTrack(string trackId, bool held = true)
+    {
+        if (!_tracks.TryGetValue(trackId, out var track))
+            return false;
+
+        track.IsTrackHeld = held;
+        if (!held)
+            track.IsDesignated = false;
+
+        return true;
+    }
+
+    public bool ReleaseTrack(string trackId)
+    {
+        if (!_tracks.TryGetValue(trackId, out var track))
+            return false;
+
+        track.IsTrackHeld = false;
+        track.IsDesignated = false;
+        return true;
     }
 
     public void DropTrackForEntity(string entityId)
@@ -425,5 +508,19 @@ public class TrackManager
             track.Classification = TrackClassification.AssumedHostile;
             track.ClassificationConfidence = Math.Max(track.ClassificationConfidence, 0.65);
         }
+    }
+
+    private static double GetTrackDropTimeSec(TrackFile track)
+    {
+        if (track.IsDesignated)
+            return DesignatedTrackDropTimeSec;
+
+        if (track.IsBeingEngaged)
+            return EngagedTrackDropTimeSec;
+
+        if (track.IsTrackHeld)
+            return HeldTrackDropTimeSec;
+
+        return TrackDropTimeSec;
     }
 }

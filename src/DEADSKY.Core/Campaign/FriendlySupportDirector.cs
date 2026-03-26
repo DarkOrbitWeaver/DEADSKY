@@ -96,6 +96,21 @@ public sealed class FriendlySupportDirector
 
         _packages.Add(new FriendlySupportPackage
         {
+            Id = "SUP-DECLARE",
+            Type = FriendlySupportType.DeclarationCell,
+            DisplayName = "ORACLE CELL",
+            RankOrRole = "ID",
+            UnitCallsign = "ORACLE-4",
+            Designation = "DECLARATION AND IFF DESK",
+            Reliability = relayDamaged ? 0.58 : 0.84,
+            Risk = 0.12,
+            Availability = relayDamaged ? SupportAvailabilityState.CoolingDown : SupportAvailabilityState.Ready,
+            CooldownRemainingSec = relayDamaged ? 75 : 0,
+            LastSummary = relayDamaged ? "IFF desk degraded by relay strain. Declare support delayed." : "Ready for declare and hostile-assessment traffic."
+        });
+
+        _packages.Add(new FriendlySupportPackage
+        {
             Id = "SUP-CAP",
             Type = FriendlySupportType.CombatAirPatrol,
             DisplayName = "VIPER LEAD",
@@ -105,6 +120,19 @@ public sealed class FriendlySupportDirector
             Reliability = 0.76,
             Risk = 0.48,
             LastSummary = "Cold on station west of sector. Available for diversion."
+        });
+
+        _packages.Add(new FriendlySupportPackage
+        {
+            Id = "SUP-JAM",
+            Type = FriendlySupportType.JammingSupport,
+            DisplayName = "MISTRAL",
+            RankOrRole = "ECM",
+            UnitCallsign = "MISTRAL-2",
+            Designation = "STANDOFF JAMMER CELL",
+            Reliability = 0.71,
+            Risk = 0.37,
+            LastSummary = "Standoff jamming orbit available on command tasking."
         });
 
         _packages.Add(new FriendlySupportPackage
@@ -307,6 +335,7 @@ public sealed class FriendlySupportDirector
     private static double GetVisibleWindow(FriendlySupportType type) => type switch
     {
         FriendlySupportType.CombatAirPatrol => 180,
+        FriendlySupportType.JammingSupport => 150,
         FriendlySupportType.Awacs => 240,
         FriendlySupportType.NearbyBattery => 120,
         _ => 0

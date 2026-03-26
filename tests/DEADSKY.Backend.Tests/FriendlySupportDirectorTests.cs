@@ -41,4 +41,41 @@ public class FriendlySupportDirectorTests
         Assert.Equal(SupportAvailabilityState.CoolingDown, cap.Availability);
         Assert.True(cap.IsVisibleInPicture);
     }
+
+    [Fact]
+    public void RequestSupport_DeclareCell_AcceptsAndQueuesIntelMessage()
+    {
+        var comms = new CommManager();
+        var director = new FriendlySupportDirector(comms);
+        director.InitializeForScenario(SimulationTestFactory.CreateOperationScenarioWithObjectives(), null);
+
+        var result = director.RequestSupport(
+            FriendlySupportType.DeclarationCell,
+            "ALPHA ACTUAL",
+            "Need declare on TRK-0001.",
+            15);
+
+        var queued = SimulationTestFactory.DrainSingleQueuedMessage(comms);
+
+        Assert.True(result.Accepted);
+        Assert.Equal(RadioChannel.IntelNet, queued.Channel);
+        Assert.Contains("ORACLE", queued.DisplayHeader, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("declare", queued.Content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Tick_JammingSupportCompletion_MakesSupportVisible()
+    {
+        var comms = new CommManager();
+        var director = new FriendlySupportDirector(comms);
+        director.InitializeForScenario(SimulationTestFactory.CreateOperationScenarioWithObjectives(), null);
+
+        director.RequestSupport(FriendlySupportType.JammingSupport, "ALPHA ACTUAL", "Need escort-jam.", 0);
+        director.Tick(55, 55);
+
+        var jammer = director.Packages.First(package => package.Type == FriendlySupportType.JammingSupport);
+
+        Assert.Equal(SupportAvailabilityState.CoolingDown, jammer.Availability);
+        Assert.True(jammer.IsVisibleInPicture);
+    }
 }

@@ -106,4 +106,38 @@ public class TrackManagerTests
         Assert.InRange(track.PositionUncertaintyM, 75, 100);
         Assert.True(track.Position.X > -50);
     }
+
+    [Fact]
+    public void HoldTrack_PreservesTrack_BeyondBaseDropWindow()
+    {
+        using var sim = SimulationTestFactory.CreateLoadedSimulation();
+        var track = SimulationTestFactory.AddDetectedHostileTrack(sim, rangeNm: 22);
+
+        Assert.True(sim.Radar.TrackManager.HoldTrack(track.TrackId));
+        track.LastDetectionTime = DateTime.UtcNow.AddSeconds(-80);
+
+        sim.Radar.TrackManager.Update(0.1);
+
+        Assert.NotNull(sim.Radar.TrackManager.GetById(track.TrackId));
+        Assert.True(track.IsTrackHeld);
+    }
+
+    [Fact]
+    public void UpdateThreatAssessment_AssignsNonZeroThreatLevel_ForClosingHostile()
+    {
+        using var sim = SimulationTestFactory.CreateLoadedSimulation();
+        var track = SimulationTestFactory.AddDetectedHostileTrack(
+            sim,
+            designation: "MiG-29",
+            bearingDeg: 35,
+            rangeNm: 18,
+            altitudeFt: 18000,
+            headingDeg: 215,
+            speedKts: 470);
+
+        track.UpdateThreatAssessment();
+
+        Assert.True(track.ClosingSpeedMps > 0);
+        Assert.InRange(track.ThreatLevel, 0.25, 1.0);
+    }
 }
