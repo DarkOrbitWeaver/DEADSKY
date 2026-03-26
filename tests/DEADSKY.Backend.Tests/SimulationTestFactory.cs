@@ -192,6 +192,30 @@ internal static class SimulationTestFactory
         return track;
     }
 
+    public static TrackFile AddDetectedFriendlyTrack(
+        SimulationEngine sim,
+        string designation = "F-16",
+        double bearingDeg = 35,
+        double rangeNm = 10,
+        double altitudeFt = 16000,
+        double headingDeg = 180,
+        double speedKts = 390)
+    {
+        var aircraft = sim.Entities.SpawnAircraftAtBearingRange(
+            designation,
+            Affiliation.Friendly,
+            bearingDeg,
+            rangeNm,
+            altitudeFt,
+            headingDeg,
+            speedKts);
+
+        var track = sim.Radar.TrackManager.ProcessDetection(aircraft, bearingDeg, iffResponse: true, radarNoise: 0);
+        track.Classification = TrackClassification.Friendly;
+        track.UpdateThreatAssessment();
+        return track;
+    }
+
     public static ToolCall CreateToolCall(string name, object args)
     {
         var json = JsonSerializer.Serialize(args);

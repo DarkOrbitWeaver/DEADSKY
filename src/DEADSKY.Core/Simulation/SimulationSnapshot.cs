@@ -1,5 +1,6 @@
 using DEADSKY.Core.Entities;
 using DEADSKY.Core.Radar;
+using DEADSKY.Core.Weapons;
 
 namespace DEADSKY.Core.Simulation;
 
@@ -34,6 +35,10 @@ public sealed class SimulationSnapshot
     public IReadOnlyList<Aircraft> HostileAircraft { get; init; } = Array.Empty<Aircraft>();
     public IReadOnlyList<SAMMissile> ActiveMissiles { get; init; } = Array.Empty<SAMMissile>();
     public IReadOnlyList<RadarSystem.EcmEffect> ActiveEcmEffects { get; init; } = Array.Empty<RadarSystem.EcmEffect>();
+    public IReadOnlyList<WeaponDefinition> AvailableWeapons { get; init; } = Array.Empty<WeaponDefinition>();
+    public WeaponDefinition? SelectedWeapon { get; init; }
+    public IReadOnlyList<TrackThreatState> TrackThreatStates { get; init; } = Array.Empty<TrackThreatState>();
+    public IReadOnlyList<EngagementIncident> RecentIncidents { get; init; } = Array.Empty<EngagementIncident>();
     public double RadarSweepAngle { get; init; }
     public double RadarRangeNm { get; init; }
     public RadarMode RadarMode { get; init; } = RadarMode.Search;

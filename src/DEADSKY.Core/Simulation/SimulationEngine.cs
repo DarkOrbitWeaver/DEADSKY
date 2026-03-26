@@ -175,7 +175,9 @@ public sealed class SimulationEngine : IDisposable
             return false;
 
         PlayerDesignate(trackId);
-        return Weapons.FireAtDesignated(battery, trackId) == EngagementResult.MissileInFlight;
+        bool fired = Weapons.FireAtDesignated(battery, trackId) == EngagementResult.MissileInFlight;
+        BuildSnapshot();
+        return fired;
     }
 
     public List<EngagementResult> PlayerSalvo(string trackId, int count)
@@ -185,7 +187,29 @@ public sealed class SimulationEngine : IDisposable
             return new List<EngagementResult>();
 
         PlayerDesignate(trackId);
-        return Weapons.FireSalvo(battery, trackId, count);
+        var results = Weapons.FireSalvo(battery, trackId, count);
+        BuildSnapshot();
+        return results;
+    }
+
+    public bool PlayerSelectWeapon(string weaponId)
+    {
+        var battery = Entities.GetPlayerBattery();
+        if (battery == null)
+            return false;
+
+        bool selected = WeaponCatalog.TrySelect(battery, weaponId);
+        if (selected)
+            BuildSnapshot();
+        return selected;
+    }
+
+    public int PlayerAbortTrack(string trackId)
+    {
+        int aborted = Weapons.AbortTrackEngagement(trackId);
+        if (aborted > 0)
+            BuildSnapshot();
+        return aborted;
     }
 
     public void PlayerSetRadarMode(RadarMode mode)
@@ -322,11 +346,15 @@ public sealed class SimulationEngine : IDisposable
             Callsign = config?.Callsign ?? "ALPHA",
             ReserveMissiles = config?.ReserveMissiles ?? 12,
             RadarRangeNm = config?.RadarRangeNm ?? 80,
+            CurrentWeaponId = WeaponCatalog.FromLegacyType(config?.MissileType ?? "9M38").Id,
             CurrentMissileType = config?.MissileType ?? "9M38",
             MissileMaxRangeNm = config?.EngagementRangeNm ?? 18,
             MissileSingleShotPk = config?.MissilePk ?? 0.7,
             RadarMode = RadarMode.Search
         };
+
+        battery.AvailableWeaponIds.Clear();
+        battery.AvailableWeaponIds.Add(battery.CurrentWeaponId);
 
         int launcherCount = config?.Launchers ?? 4;
         battery.Launchers.Clear();
@@ -340,6 +368,7 @@ public sealed class SimulationEngine : IDisposable
             });
         }
 
+        WeaponCatalog.EnsureBatteryWeapons(battery);
         battery.SyncPhysicsState();
         return battery;
     }
@@ -350,8 +379,9 @@ public sealed class SimulationEngine : IDisposable
         var trackSnapshot = Radar.TrackManager.GetAllTracks()
             .Select(CloneTrack)
             .ToList();
-
-        LatestSnapshot = new SimulationSnapshot
+        var hostileAircraft = Entities.GetHostileAircraft().OfType<Aircraft>().Select(CloneAircraft).ToList();
+        var activeMissiles = Entities.GetActiveMissiles().Select(CloneMissile).ToList();
+        var snapshotSeed = new SimulationSnapshot
         {
             GameTimeSec = GameTimeSec,
             GameTimeString = TimeSpan.FromSeconds(GameTimeSec).ToString(@"hh\:mm\:ss") + " ZULU",
@@ -360,13 +390,40 @@ public sealed class SimulationEngine : IDisposable
             FirmTracks = trackSnapshot.Where(track => track.Quality != TrackQuality.Lost).ToList(),
             HostileTracks = trackSnapshot.Where(track =>
                 track.Classification is TrackClassification.Hostile or TrackClassification.AssumedHostile).ToList(),
-            HostileAircraft = Entities.GetHostileAircraft().OfType<Aircraft>().Select(CloneAircraft).ToList(),
-            ActiveMissiles = Entities.GetActiveMissiles().Select(CloneMissile).ToList(),
+            HostileAircraft = hostileAircraft,
+            ActiveMissiles = activeMissiles,
             ActiveEcmEffects = Radar.ActiveEcmEffects.ToList(),
+            AvailableWeapons = battery == null
+                ? Array.Empty<WeaponDefinition>()
+                : WeaponCatalog.ResolveAvailable(battery.AvailableWeaponIds),
+            SelectedWeapon = battery == null ? null : WeaponCatalog.Get(battery.CurrentWeaponId),
+            RecentIncidents = Weapons.Incidents.ToList(),
             RadarSweepAngle = Radar.SweepAngleDeg,
             RadarRangeNm = battery?.RadarRangeNm ?? Radar.Model.MaxRangeNm,
             RadarMode = battery?.RadarMode ?? RadarMode.Search,
             Weather = Weather.Clone()
+        };
+        var threatStates = OperationalPictureBuilder.BuildThreatStates(snapshotSeed);
+
+        LatestSnapshot = new SimulationSnapshot
+        {
+            GameTimeSec = snapshotSeed.GameTimeSec,
+            GameTimeString = snapshotSeed.GameTimeString,
+            Battery = snapshotSeed.Battery,
+            AllTracks = snapshotSeed.AllTracks,
+            FirmTracks = snapshotSeed.FirmTracks,
+            HostileTracks = snapshotSeed.HostileTracks,
+            HostileAircraft = snapshotSeed.HostileAircraft,
+            ActiveMissiles = snapshotSeed.ActiveMissiles,
+            ActiveEcmEffects = snapshotSeed.ActiveEcmEffects,
+            AvailableWeapons = snapshotSeed.AvailableWeapons,
+            SelectedWeapon = snapshotSeed.SelectedWeapon,
+            RecentIncidents = snapshotSeed.RecentIncidents,
+            TrackThreatStates = threatStates,
+            RadarSweepAngle = snapshotSeed.RadarSweepAngle,
+            RadarRangeNm = snapshotSeed.RadarRangeNm,
+            RadarMode = snapshotSeed.RadarMode,
+            Weather = snapshotSeed.Weather
         };
     }
 
@@ -394,6 +451,7 @@ public sealed class SimulationEngine : IDisposable
             RadarSweepRateDegSec = battery.RadarSweepRateDegSec,
             MaxLaunchers = battery.MaxLaunchers,
             ReserveMissiles = battery.ReserveMissiles,
+            CurrentWeaponId = battery.CurrentWeaponId,
             CurrentMissileType = battery.CurrentMissileType,
             MissilesFired = battery.MissilesFired,
             ConfirmedKills = battery.ConfirmedKills,
@@ -422,6 +480,8 @@ public sealed class SimulationEngine : IDisposable
             SpawnTime = battery.SpawnTime,
             Status = battery.Status
         };
+
+        clone.AvailableWeaponIds = battery.AvailableWeaponIds.ToList();
 
         clone.Launchers.Clear();
         foreach (var launcher in battery.Launchers)
@@ -510,6 +570,8 @@ public sealed class SimulationEngine : IDisposable
             RadarLockDetectedTime = aircraft.RadarLockDetectedTime,
             MissileInbound = aircraft.MissileInbound,
             MissileInboundDetectedTime = aircraft.MissileInboundDetectedTime,
+            ChaffCharges = aircraft.ChaffCharges,
+            FlareCharges = aircraft.FlareCharges,
             Position = aircraft.Position,
             VelocityX = aircraft.VelocityX,
             VelocityY = aircraft.VelocityY,
@@ -539,12 +601,16 @@ public sealed class SimulationEngine : IDisposable
         var clone = new SAMMissile
         {
             MissileTypeName = missile.MissileTypeName,
+            WeaponId = missile.WeaponId,
             Guidance = missile.Guidance,
             MaxFlightTimeSec = missile.MaxFlightTimeSec,
             WarheadRadiusM = missile.WarheadRadiusM,
             FuzeRadiusM = missile.FuzeRadiusM,
             SingleShotPk = missile.SingleShotPk,
             GuidanceMemorySec = missile.GuidanceMemorySec,
+            CanAbortInFlight = missile.CanAbortInFlight,
+            SusceptibleToChaff = missile.SusceptibleToChaff,
+            SusceptibleToFlares = missile.SusceptibleToFlares,
             TargetEntityId = missile.TargetEntityId,
             Phase = missile.Phase,
             FlightTimeSec = missile.FlightTimeSec,

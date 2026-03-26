@@ -8,6 +8,7 @@ using DEADSKY.Core.Physics;
 using DEADSKY.Core.Radar;
 using DEADSKY.Core.Scenario;
 using DEADSKY.Core.Simulation;
+using DEADSKY.Core.Weapons;
 
 namespace DEADSKY.AI.Tools;
 
@@ -32,6 +33,8 @@ public class ToolRegistry
         "get_radar_contacts",
         "get_contact_details",
         "get_threat_assessment",
+        "get_shared_operational_picture",
+        "get_recent_incidents",
         "get_support_status",
         "send_radio_message",
         "broadcast_open_frequency",
@@ -105,6 +108,17 @@ public class ToolRegistry
             "Ranked threat assessment of all current contacts.",
             Array.Empty<(string, string)>(), Array.Empty<string>(),
             GetThreatAssessment);
+
+        Register("get_shared_operational_picture",
+            "Get the fused operator picture used by UI and AI: threats, support, and recent consequences.",
+            Array.Empty<(string, string)>(), Array.Empty<string>(),
+            GetSharedOperationalPicture);
+
+        Register("get_recent_incidents",
+            "Recent engagement incidents, warnings, and consequence records.",
+            new[] { ("last_n", "optional: number of incidents to return") },
+            Array.Empty<string>(),
+            GetRecentIncidents);
 
         Register("get_weather_conditions",
             "Current weather: visibility, cloud ceiling, precipitation, wind.",
@@ -415,6 +429,8 @@ public class ToolRegistry
             ready_launchers = battery.ReadyLaunchers,
             reloading_launchers = battery.ReloadingLaunchers,
             reserve_missiles = battery.ReserveMissiles,
+            current_weapon_id = battery.CurrentWeaponId,
+            current_weapon = WeaponCatalog.Get(battery.CurrentWeaponId).DisplayName,
             missiles_fired = battery.MissilesFired,
             confirmed_kills = battery.ConfirmedKills,
             hit_rate_pct = Math.Round(battery.HitRate * 100, 1),
@@ -440,6 +456,41 @@ public class ToolRegistry
             });
 
         return Task.FromResult(JsonSerializer.Serialize(new { threat_summary = tracks }));
+    }
+
+    private Task<string> GetSharedOperationalPicture(ToolCall call)
+    {
+        var picture = OperationalPictureBuilder.Build(
+            _sim.LatestSnapshot,
+            _sim.Weapons.Incidents,
+            _friendlySupport?.Packages);
+
+        return Task.FromResult(JsonSerializer.Serialize(new
+        {
+            threat_summary = picture.ThreatSummary,
+            support_summary = picture.SupportSummary,
+            consequence_summary = picture.ConsequenceSummary,
+            threats = picture.ThreatStates,
+            friendlies = picture.FriendlyForces
+        }));
+    }
+
+    private Task<string> GetRecentIncidents(ToolCall call)
+    {
+        int lastN = Math.Max(1, call.GetInt("last_n", 8));
+        var incidents = _sim.Weapons.Incidents
+            .TakeLast(lastN)
+            .Select(incident => new
+            {
+                type = incident.IncidentType,
+                summary = incident.Summary,
+                severity = incident.Severity.ToString(),
+                timestamp_utc = incident.TimestampUtc,
+                track_id = incident.TrackId,
+                entity_id = incident.EntityId,
+                weapon_id = incident.WeaponId
+            });
+        return Task.FromResult(JsonSerializer.Serialize(new { incidents }));
     }
 
     private Task<string> GetWeather(ToolCall call)

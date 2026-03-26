@@ -869,6 +869,7 @@ public partial class MainViewModel : ObservableObject
             SelectedTrack = snapshot.AllTracks.FirstOrDefault(t => t.TrackId == SelectedTrackId);
 
         RefreshFireControlFeedback(snapshot);
+        RefreshWeaponState(snapshot);
         RefreshSelectedTrackReadout();
         RefreshAssessment(snapshot);
         RefreshCommandStates();
@@ -1273,6 +1274,17 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(SupportStatusBoard));
         OnPropertyChanged(nameof(SupportActivitySummaryText));
         OnPropertyChanged(nameof(VisibleSupportPictureText));
+        OnPropertyChanged(nameof(WeaponLoadoutSummaryText));
+        OnPropertyChanged(nameof(SelectedWeaponDisplayText));
+        OnPropertyChanged(nameof(SelectedWeaponGuidanceText));
+        OnPropertyChanged(nameof(SelectedWeaponEnvelopeText));
+        OnPropertyChanged(nameof(SelectedWeaponCountermeasureText));
+        OnPropertyChanged(nameof(SelectedWeaponSupportText));
+        OnPropertyChanged(nameof(SelectedWeaponDescriptionText));
+        OnPropertyChanged(nameof(OperationalPictureText));
+        OnPropertyChanged(nameof(RecentIncidentSummaryText));
+        OnPropertyChanged(nameof(VisibleFriendlyForceText));
+        OnPropertyChanged(nameof(AbortAvailabilityText));
         OnPropertyChanged(nameof(ScenarioContractStatusText));
         OnPropertyChanged(nameof(RadioRulesSummaryText));
         OnPropertyChanged(nameof(HasUnreadComms));
@@ -1298,6 +1310,17 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CurrentScenarioArchetypeText));
         OnPropertyChanged(nameof(CurrentScenarioSaveTruthText));
         OnPropertyChanged(nameof(SupportActivitySummaryText));
+        OnPropertyChanged(nameof(WeaponLoadoutSummaryText));
+        OnPropertyChanged(nameof(SelectedWeaponDisplayText));
+        OnPropertyChanged(nameof(SelectedWeaponGuidanceText));
+        OnPropertyChanged(nameof(SelectedWeaponEnvelopeText));
+        OnPropertyChanged(nameof(SelectedWeaponCountermeasureText));
+        OnPropertyChanged(nameof(SelectedWeaponSupportText));
+        OnPropertyChanged(nameof(SelectedWeaponDescriptionText));
+        OnPropertyChanged(nameof(OperationalPictureText));
+        OnPropertyChanged(nameof(RecentIncidentSummaryText));
+        OnPropertyChanged(nameof(VisibleFriendlyForceText));
+        OnPropertyChanged(nameof(AbortAvailabilityText));
     }
 
     private void ResetUiForScenarioLoad()
@@ -1422,12 +1445,14 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnSelectedTrackIdChanged(string? value)
     {
+        RefreshWeaponPresentation();
         RefreshDerivedBindings();
         RefreshCommandStates();
     }
 
     partial void OnSelectedTrackChanged(TrackFile? value)
     {
+        RefreshWeaponPresentation();
         RefreshDerivedBindings();
         RefreshCommandStates();
     }

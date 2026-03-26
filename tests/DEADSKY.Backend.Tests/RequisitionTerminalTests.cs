@@ -1,5 +1,6 @@
 using DEADSKY.Core.Economy;
 using DEADSKY.Core.Progression;
+using DEADSKY.Core.Weapons;
 
 namespace DEADSKY.Backend.Tests;
 
@@ -93,5 +94,22 @@ public class RequisitionTerminalTests
         Assert.True(terminal.IsOwned("data_link"));
         Assert.Empty(terminal.PendingDeliveries);
         Assert.True(sim.Entities.GetPlayerBattery()!.HasDataLink);
+    }
+
+    [Fact]
+    public void Purchase_LongRangeMissiles_UnlocksWeaponInBatteryLoadout()
+    {
+        using var sim = SimulationTestFactory.CreateLoadedSimulation();
+        var budget = new BudgetSystem();
+        var profile = new PlayerProfile();
+        profile.LoadProgress(missionsCompleted: 2, totalKills: 3);
+        var terminal = new RequisitionTerminal();
+
+        var result = terminal.Purchase("long_range_missiles", budget, profile, sim);
+        profile.LoadProgress(missionsCompleted: 3, totalKills: 3);
+        terminal.ProcessMissionTurnover(profile, sim);
+
+        Assert.True(result.Success);
+        Assert.Contains(WeaponCatalog.LongRangeSarhWeaponId, sim.Entities.GetPlayerBattery()!.AvailableWeaponIds);
     }
 }

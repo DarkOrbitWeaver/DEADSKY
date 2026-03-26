@@ -3,6 +3,7 @@ using System.Linq;
 using DEADSKY.Core.Entities;
 using DEADSKY.Core.Progression;
 using DEADSKY.Core.Simulation;
+using DEADSKY.Core.Weapons;
 
 namespace DEADSKY.Core.Economy;
 
@@ -57,6 +58,14 @@ public sealed class RequisitionTerminal
             LeadTimeMissions: 1),
         new("reserve_missile_crate", "Reserve Missile Crate", RequisitionCategory.Missiles, 3200,
             "Adds four reserve missiles to the battery magazine."),
+        new("long_range_missiles", "48N6 Long-Range Missile Pack", RequisitionCategory.Missiles, 6400,
+            "Unlocks a long-range active-radar missile option for early outer-ring shots.",
+            PlayerRank.Lieutenant,
+            LeadTimeMissions: 1),
+        new("ir_point_defense", "9M331 IR Point-Defense Pack", RequisitionCategory.Missiles, 5200,
+            "Unlocks a short-range infrared missile for close-in or degraded-radar fights.",
+            PlayerRank.Lieutenant,
+            LeadTimeMissions: 1),
         new("proximity_frag_upgrade", "Proximity Frag Warhead Upgrade", RequisitionCategory.Missiles, 4000,
             "Improves single-shot PK with a better proximity-fragmentation package.",
             LeadTimeMissions: 1),
@@ -64,14 +73,14 @@ public sealed class RequisitionTerminal
             "Keeps critical systems alive after power disruption.",
             LeadTimeMissions: 1),
         new("hardened_comms", "Hardened Communications", RequisitionCategory.Electronics, 5000,
-            "Improves command-net survivability and future anti-jam support.",
+            "Improves command-net survivability and support reliability under strain.",
             LeadTimeMissions: 1),
         new("data_link", "Data Link Terminal", RequisitionCategory.Electronics, 7000,
-            "Enables future shared track picture and networked defense flows.",
+            "Improves shared operational picture quality for command, intel, and support coordination.",
             PlayerRank.Captain,
             LeadTimeMissions: 2),
         new("decoy_emitter", "Decoy Emitter", RequisitionCategory.Electronics, 9000,
-            "Supports deception against anti-radiation strikes and enemy targeting.",
+            "Improves decoying and support survivability against hostile targeting.",
             PlayerRank.Captain,
             LeadTimeMissions: 1)
     };
@@ -207,6 +216,12 @@ public sealed class RequisitionTerminal
                 break;
             case "reserve_missile_crate":
                 battery.ReserveMissiles += 4;
+                break;
+            case "long_range_missiles":
+                WeaponCatalog.Unlock(battery, WeaponCatalog.LongRangeSarhWeaponId);
+                break;
+            case "ir_point_defense":
+                WeaponCatalog.Unlock(battery, WeaponCatalog.ShortRangeIrWeaponId);
                 break;
             case "proximity_frag_upgrade":
                 battery.MissileSingleShotPk = Math.Min(0.95, battery.MissileSingleShotPk + 0.05);

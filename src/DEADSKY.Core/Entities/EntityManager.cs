@@ -1,4 +1,5 @@
 using DEADSKY.Core.Physics;
+using DEADSKY.Core.Weapons;
 
 namespace DEADSKY.Core.Entities;
 
@@ -188,13 +189,21 @@ public class EntityManager
         SAMBattery battery, Launcher launcher, Entity target,
         string missileType, double singleShotPk)
     {
+        var weapon = WeaponCatalog.Get(battery.CurrentWeaponId);
         var missile = new SAMMissile
         {
+            WeaponId = weapon.Id,
             MissileTypeName = missileType,
             TargetEntityId = target.Id,
             LaunchedByBatteryId = battery.Id,
             LauncherId = launcher.Id,
             SingleShotPk = singleShotPk,
+            Guidance = weapon.GuidanceMode,
+            CanAbortInFlight = weapon.CanAbortInFlight,
+            SusceptibleToChaff = weapon.SusceptibleToChaff,
+            SusceptibleToFlares = weapon.SusceptibleToFlares,
+            MaxFlightTimeSec = weapon.GuidanceMode == GuidanceMode.ActiveRadar ? 42.0 :
+                weapon.GuidanceMode == GuidanceMode.Infrared ? 18.0 : 30.0,
             Position = battery.Position,
             HeadingDeg = battery.Position.HeadingTo(target.Position),
             AltitudeM = battery.AltitudeM + 10, // launch height

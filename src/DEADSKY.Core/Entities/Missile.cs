@@ -4,36 +4,39 @@ namespace DEADSKY.Core.Entities;
 
 public enum GuidanceMode
 {
-    SemiActiveRadar,    // Radar illuminates, missile homes on reflection
-    ActiveRadar,        // Missile has own seeker (fire and forget)
-    CommandGuidance,    // Ground controller sends steering commands
-    Ballistic           // Guidance lost — coasting
+    SemiActiveRadar,
+    ActiveRadar,
+    Infrared,
+    CommandGuidance,
+    Ballistic
 }
 
 public enum MissilePhase
 {
-    Boost,      // Motor burning, accelerating
-    Sustain,    // Sustainer motor burning
-    Coast,      // Motor burned out, coasting
-    Terminal    // Final approach
+    Boost,
+    Sustain,
+    Coast,
+    Terminal
 }
 
 /// <summary>
 /// A SAM missile in flight. Uses proportional navigation to intercept target.
-/// Fuel-limited, can lose guidance, can be decoyed.
+/// Fuel-limited, can lose guidance, can be decoyed, and some weapons support abort.
 /// </summary>
 public class SAMMissile : Entity
 {
-    // ── Configuration ─────────────────────────────────────────────────
     public string MissileTypeName { get; init; } = "9M38";
+    public string WeaponId { get; init; } = "";
     public GuidanceMode Guidance { get; set; } = GuidanceMode.SemiActiveRadar;
     public double MaxFlightTimeSec { get; init; } = 30.0;
-    public double WarheadRadiusM { get; init; } = 17.0;    // lethal radius meters
-    public double FuzeRadiusM { get; init; } = 25.0;       // proximity fuze trigger radius
+    public double WarheadRadiusM { get; init; } = 17.0;
+    public double FuzeRadiusM { get; init; } = 25.0;
     public double SingleShotPk { get; init; } = 0.70;
     public double GuidanceMemorySec { get; init; } = 2.8;
+    public bool CanAbortInFlight { get; init; }
+    public bool SusceptibleToChaff { get; init; }
+    public bool SusceptibleToFlares { get; init; }
 
-    // ── State ──────────────────────────────────────────────────────────
     public string TargetEntityId { get; set; } = "";
     public MissilePhase Phase { get; set; } = MissilePhase.Boost;
     public double FlightTimeSec { get; set; }
@@ -46,11 +49,12 @@ public class SAMMissile : Entity
     public double LastKnownTargetAltitudeM { get; private set; }
     public double ClosestApproachM { get; private set; } = double.MaxValue;
 
-    // ── Detonation ─────────────────────────────────────────────────────
     public bool HasDetonated { get; private set; }
     public bool WasKill { get; private set; }
     public Vec2? DetonationPosition { get; private set; }
     public bool DetonationProcessed { get; set; }
+    public bool AbortRequested { get; private set; }
+    public bool CountermeasureDecoyed { get; private set; }
 
     public SAMMissile()
     {
@@ -62,13 +66,13 @@ public class SAMMissile : Entity
 
     public override void Update(double deltaTime)
     {
-        if (!IsActive || HasDetonated) return;
+        if (!IsActive || HasDetonated)
+            return;
 
         FlightTimeSec += deltaTime;
 
         if (FlightTimeSec > MaxFlightTimeSec)
         {
-            // Missile self-destructs — timed fuze
             Detonate(false, Position);
             return;
         }
@@ -76,13 +80,16 @@ public class SAMMissile : Entity
         base.Update(deltaTime);
     }
 
-    /// <summary>
-    /// Update missile guidance toward target.
-    /// Call this each tick BEFORE base.Update() to set heading.
-    /// </summary>
     public void UpdateGuidance(Entity? target)
     {
-        if (target == null || !GuidanceActive || HasDetonated) return;
+        if (target == null || !GuidanceActive || HasDetonated)
+            return;
+
+        if (target is Aircraft aircraft && TryBreakLockFromCountermeasures(aircraft))
+        {
+            LoseGuidance();
+            return;
+        }
 
         Vec2 targetVel = new(target.VelocityX, target.VelocityY);
         LastKnownTargetPosition = target.Position;
@@ -168,6 +175,27 @@ public class SAMMissile : Entity
         Phase = MissilePhase.Coast;
     }
 
+    public bool TryAbort()
+    {
+        if (!CanAbortInFlight || HasDetonated)
+            return false;
+
+        AbortRequested = true;
+        Detonate(false, Position);
+        return true;
+    }
+
+    private bool TryBreakLockFromCountermeasures(Aircraft aircraft)
+    {
+        bool chaffBreak = SusceptibleToChaff && aircraft.IsChaffActive && SimulationRandom.Instance.NextDouble() < 0.35;
+        bool flareBreak = SusceptibleToFlares && aircraft.IsFlareActive && SimulationRandom.Instance.NextDouble() < 0.45;
+        if (!chaffBreak && !flareBreak)
+            return false;
+
+        CountermeasureDecoyed = true;
+        return true;
+    }
+
     private void Detonate(bool kill, Vec2 position)
     {
         HasDetonated = true;
@@ -183,7 +211,7 @@ public class SAMMissile : Entity
 public class IncomingMissile : Entity
 {
     public string MissileTypeName { get; init; } = "Cruise";
-    public Vec2 TargetPosition { get; init; }  // Where it's headed
+    public Vec2 TargetPosition { get; init; }
     public bool HasBeenIntercepted { get; set; }
     public bool ReachedTarget { get; set; }
     public double DistanceToTargetM => Position.DistanceTo(TargetPosition);
@@ -193,16 +221,16 @@ public class IncomingMissile : Entity
         Type = EntityType.CruiseMissile;
         Affiliation = Affiliation.Hostile;
         FlightModel = FlightModel.CruiseMissile;
-        RcsM2 = 0.1;  // Small radar cross section
+        RcsM2 = 0.1;
     }
 
     public override void Update(double deltaTime)
     {
-        if (!IsActive) return;
+        if (!IsActive)
+            return;
 
-        // Steer toward target
         RequestedHeadingDeg = Position.HeadingTo(TargetPosition);
-        RequestedAltitudeM = AltitudeM; // Terrain following handled externally
+        RequestedAltitudeM = AltitudeM;
 
         if (DistanceToTargetM < 200)
         {

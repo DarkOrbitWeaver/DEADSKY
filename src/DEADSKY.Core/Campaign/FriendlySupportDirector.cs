@@ -1,4 +1,5 @@
 using DEADSKY.Core.Comms;
+using DEADSKY.Core.Entities;
 using DEADSKY.Core.Scenario;
 
 namespace DEADSKY.Core.Campaign;
@@ -198,10 +199,14 @@ public sealed class FriendlySupportDirector
                 package.DelayRemainingSec = Math.Max(0, package.DelayRemainingSec - deltaTime);
                 if (package.DelayRemainingSec == 0 && package.Availability == SupportAvailabilityState.Tasked)
                 {
+                    bool failed = package.Risk >= 0.5 &&
+                        SimulationRandom.Instance.NextDouble() < (package.Risk * 0.35);
                     package.CooldownRemainingSec = GetCooldown(package.Type);
-                    package.VisibleUntilSec = GetVisibleWindow(package.Type);
-                    package.Availability = SupportAvailabilityState.CoolingDown;
-                    package.LastSummary = BuildCompletionSummary(package.Type, package.UnitCallsign);
+                    package.VisibleUntilSec = failed ? 0 : GetVisibleWindow(package.Type);
+                    package.Availability = failed ? SupportAvailabilityState.Damaged : SupportAvailabilityState.CoolingDown;
+                    package.LastSummary = failed
+                        ? BuildFailureSummary(package.Type, package.UnitCallsign)
+                        : BuildCompletionSummary(package.Type, package.UnitCallsign);
                     _comms.Queue(CommManager.CreateMessage(
                         RadioRules.CreateFriendlySupportProfile(package.DisplayName, package.RankOrRole, package.UnitCallsign, package.Designation),
                         ResolveChannel(package.Type),
@@ -217,7 +222,8 @@ public sealed class FriendlySupportDirector
             if (package.CooldownRemainingSec > 0)
             {
                 package.CooldownRemainingSec = Math.Max(0, package.CooldownRemainingSec - deltaTime);
-                if (package.CooldownRemainingSec == 0 && package.Availability == SupportAvailabilityState.CoolingDown)
+                if (package.CooldownRemainingSec == 0 &&
+                    package.Availability is SupportAvailabilityState.CoolingDown or SupportAvailabilityState.Damaged)
                 {
                     package.Availability = SupportAvailabilityState.Ready;
                     package.LastSummary = "Support package reset and ready.";
@@ -371,5 +377,14 @@ public sealed class FriendlySupportDirector
         FriendlySupportType.NearbyBattery => $"{unitCallsign}, BRAVO battery holding crossfire lane and reporting ready.",
         FriendlySupportType.Awacs => $"{unitCallsign}, wide-area picture cleanly fused. Support track labels pushed to the board.",
         _ => $"{unitCallsign}, support action complete."
+    };
+
+    private static string BuildFailureSummary(FriendlySupportType type, string unitCallsign) => type switch
+    {
+        FriendlySupportType.CombatAirPatrol => $"{unitCallsign}, CAP diversion forced off by threat fuel or weather. Rebuilding outer screen.",
+        FriendlySupportType.JammingSupport => $"{unitCallsign}, jamming run cut short under pressure. Effects partial only.",
+        FriendlySupportType.NearbyBattery => $"{unitCallsign}, cross-battery window collapsed. Hold your own fire lane.",
+        FriendlySupportType.Awacs => $"{unitCallsign}, fused picture degraded. Relay quality unstable.",
+        _ => $"{unitCallsign}, support action degraded in execution."
     };
 }

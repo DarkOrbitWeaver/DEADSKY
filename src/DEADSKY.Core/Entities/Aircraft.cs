@@ -69,6 +69,12 @@ public class Aircraft : Entity
     public DateTime? RadarLockDetectedTime { get; set; }
     public bool MissileInbound { get; set; }
     public DateTime? MissileInboundDetectedTime { get; set; }
+    public int ChaffCharges { get; set; } = 4;
+    public int FlareCharges { get; set; } = 4;
+    public DateTime? ChaffActiveUntilUtc { get; private set; }
+    public DateTime? FlareActiveUntilUtc { get; private set; }
+    public bool IsChaffActive => ChaffActiveUntilUtc.HasValue && ChaffActiveUntilUtc.Value > DateTime.UtcNow;
+    public bool IsFlareActive => FlareActiveUntilUtc.HasValue && FlareActiveUntilUtc.Value > DateTime.UtcNow;
 
     // ── Evasion state ─────────────────────────────────────────────────
     private double _evasionTimer;
@@ -155,6 +161,12 @@ public class Aircraft : Entity
                                 now - MissileInboundDetectedTime.Value <= TimeSpan.FromSeconds(8);
 
         ECMActive = HasECM && (radarSpikeHot || missileThreatHot);
+
+        if (radarSpikeHot && ChaffCharges > 0)
+            DeployChaff();
+
+        if (missileThreatHot && FlareCharges > 0)
+            DeployFlares();
 
         if (missileThreatHot)
         {
@@ -260,6 +272,24 @@ public class Aircraft : Entity
     {
         // Simple orbit: constantly turn
         RequestedHeadingDeg = (HeadingDeg + 2.0 * deltaTime + 360) % 360;
+    }
+
+    private void DeployChaff()
+    {
+        if (IsChaffActive || ChaffCharges <= 0)
+            return;
+
+        ChaffCharges--;
+        ChaffActiveUntilUtc = DateTime.UtcNow.AddSeconds(4);
+    }
+
+    private void DeployFlares()
+    {
+        if (IsFlareActive || FlareCharges <= 0)
+            return;
+
+        FlareCharges--;
+        FlareActiveUntilUtc = DateTime.UtcNow.AddSeconds(3);
     }
 
     // ── Static factory methods ────────────────────────────────────────

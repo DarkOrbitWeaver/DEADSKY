@@ -4,6 +4,7 @@ using DEADSKY.Core.Radar;
 using DEADSKY.Core.Physics;
 using DEADSKY.Core.Scenario;
 using DEADSKY.Core.Simulation;
+using DEADSKY.Core.Weapons;
 using System.Linq;
 
 namespace DEADSKY.Backend.Tests;
@@ -314,6 +315,50 @@ public class SimulationEngineTests
         Assert.True(refreshedTrack!.IsTrackHeld);
         Assert.True(missile.GuidanceActive);
         Assert.True(missile.GuidanceMemoryRemainingSec > 0);
+    }
+
+    [Fact]
+    public void PlayerSelectWeapon_SwitchesToUnlockedIrWeapon_AndLaunchesInfraredMissile()
+    {
+        using var sim = SimulationTestFactory.CreateLoadedSimulation();
+        var battery = sim.Entities.GetPlayerBattery()!;
+        WeaponCatalog.Unlock(battery, WeaponCatalog.ShortRangeIrWeaponId);
+
+        Assert.True(sim.PlayerSelectWeapon(WeaponCatalog.ShortRangeIrWeaponId));
+
+        var track = SimulationTestFactory.AddDetectedHostileTrack(sim, rangeNm: 4, bearingDeg: 30, headingDeg: 210);
+        Assert.True(sim.PlayerFire(track.TrackId), sim.Weapons.LastError);
+
+        var missile = sim.Entities.GetActiveMissiles().Single();
+        Assert.Equal(GuidanceMode.Infrared, missile.Guidance);
+        Assert.Equal(WeaponCatalog.ShortRangeIrWeaponId, missile.WeaponId);
+    }
+
+    [Fact]
+    public void PlayerAbortTrack_SelfDestructsAbortableMissile_AndRecordsIncident()
+    {
+        using var sim = SimulationTestFactory.CreateLoadedSimulation();
+        var track = SimulationTestFactory.AddDetectedHostileTrack(sim, rangeNm: 12);
+
+        Assert.True(sim.PlayerFire(track.TrackId), sim.Weapons.LastError);
+
+        int aborted = sim.PlayerAbortTrack(track.TrackId);
+
+        Assert.Equal(1, aborted);
+        Assert.Contains(sim.Weapons.Incidents, incident => incident.IncidentType == "engagement_abort");
+    }
+
+    [Fact]
+    public void PlayerFire_OnFriendlyTrack_IsDeniedAndRecordsFriendlyFireIncident()
+    {
+        using var sim = SimulationTestFactory.CreateLoadedSimulation();
+        var track = SimulationTestFactory.AddDetectedFriendlyTrack(sim);
+
+        bool fired = sim.PlayerFire(track.TrackId);
+
+        Assert.False(fired);
+        Assert.Contains("FRIENDLY TRACK", sim.Weapons.LastError, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(sim.Weapons.Incidents, incident => incident.IncidentType == "friendly_fire_attempt");
     }
 
     [Fact]

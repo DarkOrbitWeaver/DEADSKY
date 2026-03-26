@@ -378,6 +378,8 @@ Rules:
         "get_radar_contacts",
         "get_contact_details",
         "get_threat_assessment",
+        "get_shared_operational_picture",
+        "get_recent_incidents",
         "get_support_status",
         "get_battery_status",
         "get_engagement_history"
@@ -497,6 +499,8 @@ If a separate final reply is requested, do not call send_radio_message; that tra
         "get_radar_contacts",
         "get_contact_details",
         "get_threat_assessment",
+        "get_shared_operational_picture",
+        "get_recent_incidents",
         "get_engagement_history"
     ]);
 

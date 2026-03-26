@@ -1,6 +1,7 @@
 using DEADSKY.Core.Entities;
 using DEADSKY.Core.Physics;
 using DEADSKY.Core.Radar;
+using DEADSKY.Core.Simulation;
 
 namespace DEADSKY.Core.Weapons;
 
@@ -12,7 +13,8 @@ public enum EngagementResult
     MissDirect,
     MissGuidanceLost,
     TargetLeftArea,
-    AlreadyDestroyed
+    AlreadyDestroyed,
+    AbortSuccessful
 }
 
 public record EngagementRecord(
@@ -25,7 +27,7 @@ public record EngagementRecord(
 
 /// <summary>
 /// Manages all weapon engagements. Handles the full cycle:
-/// Designate -> Launch -> Guide -> Assess.
+/// designate -> launch -> guide -> assess -> record consequences.
 /// </summary>
 public class WeaponsSystem
 {
@@ -33,11 +35,13 @@ public class WeaponsSystem
     private readonly TrackManager _tracks;
 
     public List<EngagementRecord> EngagementHistory { get; } = new();
+    public List<EngagementIncident> Incidents { get; } = new();
     public string LastError { get; private set; } = "";
 
     public event Action<SAMMissile, Entity>? MissileLaunched;
     public event Action<SAMMissile, Entity?, EngagementResult>? EngagementCompleted;
     public event Action<string>? EngagementError;
+    public event Action<EngagementIncident>? IncidentRecorded;
 
     public WeaponsSystem(EntityManager entities, TrackManager tracks)
     {
@@ -45,7 +49,6 @@ public class WeaponsSystem
         _tracks = tracks;
     }
 
-    /// <summary>Update all in-flight missiles. Call every simulation tick.</summary>
     public void Update(double deltaTime)
     {
         var missiles = _entities.GetByType<SAMMissile>()
@@ -57,27 +60,16 @@ public class WeaponsSystem
 
         foreach (var missile in missiles)
         {
-            Entity? target = null;
-            if (missile.TargetEntityId != null)
-                target = _entities.Get(missile.TargetEntityId);
+            Entity? target = string.IsNullOrWhiteSpace(missile.TargetEntityId)
+                ? null
+                : _entities.Get(missile.TargetEntityId);
 
             if (target != null && target.IsActive && !missile.HasDetonated)
             {
-                if (missile.Guidance == GuidanceMode.SemiActiveRadar)
+                if (missile.Guidance == GuidanceMode.SemiActiveRadar || missile.Guidance == GuidanceMode.CommandGuidance)
                 {
-                    var guidanceTrack = !string.IsNullOrWhiteSpace(target.Id)
-                        ? _tracks.GetByEntityId(target.Id)
-                        : null;
-                    bool radarIlluminating = battery?.RadarOnline == true
-                        && battery.RadarMode == RadarMode.SingleTargetTrack
-                        && battery.DesignatedTargetId == target.Id;
-                    bool twsSupport = battery?.RadarOnline == true
-                        && battery.RadarMode == RadarMode.TrackWhileScan
-                        && guidanceTrack != null
-                        && guidanceTrack.IsTrackHeld
-                        && guidanceTrack.Quality != TrackQuality.Lost;
-
-                    if (radarIlluminating || twsSupport)
+                    bool supported = HasRadarSupportForTarget(battery, target);
+                    if (supported)
                         missile.UpdateGuidance(target);
                     else
                         missile.UpdateGuidanceFromMemory(deltaTime);
@@ -100,7 +92,6 @@ public class WeaponsSystem
         }
     }
 
-    /// <summary>Designate (lock radar on) a track for engagement</summary>
     public bool DesignateTarget(string trackId)
     {
         var track = _tracks.GetById(trackId);
@@ -118,7 +109,6 @@ public class WeaponsSystem
         return true;
     }
 
-    /// <summary>Fire one missile at the designated target</summary>
     public EngagementResult FireAtDesignated(SAMBattery battery, string trackId)
     {
         var track = _tracks.GetById(trackId);
@@ -128,11 +118,26 @@ public class WeaponsSystem
             return EngagementResult.MissDirect;
         }
 
+        var weapon = WeaponCatalog.Get(battery.CurrentWeaponId);
         Entity? target = track.EntityId != null ? _entities.Get(track.EntityId) : null;
         if (target == null || !target.IsActive)
         {
             RaiseError("Target no longer active");
             return EngagementResult.AlreadyDestroyed;
+        }
+
+        if (track.Classification == TrackClassification.Friendly || target.Affiliation == Affiliation.Friendly)
+        {
+            RecordIncident(new EngagementIncident(
+                "friendly_fire_attempt",
+                $"Engagement denied on friendly track {track.TrackId}.",
+                IncidentSeverity.Critical,
+                DateTime.UtcNow,
+                track.TrackId,
+                target.Id,
+                weapon.Id));
+            RaiseError("FRIENDLY TRACK - cease fire");
+            return EngagementResult.MissDirect;
         }
 
         double rangeNm = CoordinateSystem.MetersToNm(target.Position.Length);
@@ -141,10 +146,20 @@ public class WeaponsSystem
         if (!battery.CanEngage(rangeNm, altFt))
         {
             string reason = rangeNm > battery.MissileMaxRangeNm ? "Target out of range" :
-                           rangeNm < battery.MissileMinRangeNm ? "Target too close (min range)" :
-                           "Target outside altitude envelope";
+                rangeNm < battery.MissileMinRangeNm ? "Target too close (min range)" :
+                "Target outside altitude envelope";
             RaiseError(reason);
             return EngagementResult.MissDirect;
+        }
+
+        if (weapon.GuidanceMode == GuidanceMode.Infrared)
+        {
+            bool coldAspect = track.AspectString.Contains("COLD", StringComparison.OrdinalIgnoreCase);
+            if (coldAspect && rangeNm > 4.5)
+            {
+                RaiseError("IR seeker poor on cold-aspect target");
+                return EngagementResult.MissDirect;
+            }
         }
 
         var launcher = battery.GetReadyLauncher();
@@ -160,10 +175,16 @@ public class WeaponsSystem
             return EngagementResult.MissDirect;
         }
 
-        if (battery.ROE == RulesOfEngagement.WeaponsTight
-            && track.Classification is not (TrackClassification.Hostile or TrackClassification.AssumedHostile))
+        if (battery.ROE == RulesOfEngagement.WeaponsTight &&
+            track.Classification is not (TrackClassification.Hostile or TrackClassification.AssumedHostile))
         {
             RaiseError("WEAPONS TIGHT - target not confirmed hostile");
+            return EngagementResult.MissDirect;
+        }
+
+        if (weapon.RequiresRadarSupport && !HasRadarSupportForTarget(battery, target))
+        {
+            RaiseError("Weapon requires radar support");
             return EngagementResult.MissDirect;
         }
 
@@ -171,8 +192,8 @@ public class WeaponsSystem
             battery,
             launcher,
             target,
-            battery.CurrentMissileType,
-            battery.MissileSingleShotPk);
+            weapon.ShortCode,
+            weapon.BaseSingleShotPk);
 
         track.IsBeingEngaged = true;
         track.AssignedMissileId = missile.Id;
@@ -183,7 +204,6 @@ public class WeaponsSystem
         return EngagementResult.MissileInFlight;
     }
 
-    /// <summary>Fire a salvo of N missiles at the designated target</summary>
     public List<EngagementResult> FireSalvo(SAMBattery battery, string trackId, int count)
     {
         var results = new List<EngagementResult>();
@@ -198,17 +218,80 @@ public class WeaponsSystem
         return results;
     }
 
+    public bool CanAbortTrack(string trackId)
+    {
+        var track = _tracks.GetById(trackId);
+        if (track?.AssignedMissileId == null)
+            return false;
+
+        return _entities.Get(track.AssignedMissileId) is SAMMissile missile && missile.CanAbortInFlight && !missile.HasDetonated;
+    }
+
+    public int AbortTrackEngagement(string trackId)
+    {
+        var track = _tracks.GetById(trackId);
+        if (track?.AssignedMissileId == null)
+            return 0;
+
+        if (_entities.Get(track.AssignedMissileId) is not SAMMissile missile || !missile.TryAbort())
+            return 0;
+
+        RecordIncident(new EngagementIncident(
+            "engagement_abort",
+            $"Abort ordered for missile {missile.MissileTypeName} against {track.TrackId}.",
+            IncidentSeverity.Warning,
+            DateTime.UtcNow,
+            track.TrackId,
+            track.EntityId,
+            missile.WeaponId));
+
+        return 1;
+    }
+
+    public double CalculatePk(SAMBattery battery, TrackFile track)
+    {
+        var weapon = WeaponCatalog.Get(battery.CurrentWeaponId);
+        double pk = weapon.BaseSingleShotPk;
+
+        double maxRange = battery.MissileMaxRangeNm;
+        double minRange = battery.MissileMinRangeNm;
+        double rangeFactor = (track.RangeNm - minRange) / Math.Max(0.1, maxRange - minRange);
+        rangeFactor = Math.Clamp(rangeFactor, 0, 1);
+        double rangeModifier = 1.0 - Math.Abs(rangeFactor - 0.4) * 0.5;
+
+        var entity = track.EntityId != null ? _entities.Get(track.EntityId) : null;
+        double countermeasureMod = 1.0;
+        if (entity is Aircraft aircraft)
+        {
+            if (weapon.SusceptibleToChaff && (aircraft.ECMActive || aircraft.IsChaffActive))
+                countermeasureMod *= 0.68;
+            if (weapon.SusceptibleToFlares && aircraft.IsFlareActive)
+                countermeasureMod *= 0.62;
+        }
+
+        double altMod = track.AltitudeFt < 500 ? 0.5 : 1.0;
+
+        return Math.Clamp(pk * rangeModifier * countermeasureMod * altMod, 0.05, 0.97);
+    }
+
+    public double CalculateSalvoPk(SAMBattery battery, TrackFile track, int salvoCount)
+    {
+        double singlePk = CalculatePk(battery, track);
+        return 1.0 - Math.Pow(1.0 - singlePk, salvoCount);
+    }
+
     private void UpdateThreatAwareness(SAMBattery? battery, IReadOnlyList<SAMMissile> missiles)
     {
         DateTime now = DateTime.UtcNow;
 
-        if (battery?.RadarMode == RadarMode.SingleTargetTrack &&
-            !string.IsNullOrWhiteSpace(battery.DesignatedTargetId) &&
-            _entities.Get(battery.DesignatedTargetId) is Aircraft lockedAircraft)
+        if (battery?.RadarOnline == true)
         {
-            lockedAircraft.RadarLockDetected = true;
-            lockedAircraft.RadarLockDetectedTime = now;
-            lockedAircraft.RadarLockBearingDeg = lockedAircraft.Position.HeadingTo(battery.Position);
+            foreach (var hostile in _entities.GetHostileAircraft().OfType<Aircraft>())
+            {
+                hostile.RadarLockDetected = true;
+                hostile.RadarLockDetectedTime = now;
+                hostile.RadarLockBearingDeg = hostile.Position.HeadingTo(battery.Position);
+            }
         }
 
         foreach (var missile in missiles)
@@ -224,13 +307,36 @@ public class WeaponsSystem
         }
     }
 
+    private bool HasRadarSupportForTarget(SAMBattery? battery, Entity target)
+    {
+        if (battery?.RadarOnline != true)
+            return false;
+
+        var guidanceTrack = _tracks.GetByEntityId(target.Id);
+        bool radarIlluminating = battery.RadarMode == RadarMode.SingleTargetTrack &&
+                                 battery.DesignatedTargetId == target.Id;
+        bool twsSupport = battery.RadarMode == RadarMode.TrackWhileScan &&
+                          guidanceTrack != null &&
+                          guidanceTrack.IsTrackHeld &&
+                          guidanceTrack.Quality != TrackQuality.Lost;
+        return radarIlluminating || twsSupport;
+    }
+
     private void ProcessDetonation(SAMMissile missile, Entity? target)
     {
         var battery = _entities.GetPlayerBattery();
         var preImpactTrack = target != null ? _tracks.GetByEntityId(target.Id) : null;
         EngagementResult result;
 
-        if (missile.WasKill && target != null)
+        if (missile.AbortRequested)
+        {
+            result = EngagementResult.AbortSuccessful;
+        }
+        else if (missile.CountermeasureDecoyed)
+        {
+            result = EngagementResult.MissGuidanceLost;
+        }
+        else if (missile.WasKill && target != null)
         {
             target.Status = EntityStatus.Destroyed;
             result = EngagementResult.KillConfirmed;
@@ -278,7 +384,20 @@ public class WeaponsSystem
             EntityId: target?.Id ?? "UNKNOWN",
             MissileId: missile.Id,
             LaunchTime: missile.SpawnTime,
-            Result: result));
+            Result: result,
+            Notes: missile.CountermeasureDecoyed ? "Countermeasure decoyed." : missile.AbortRequested ? "Abort commanded." : ""));
+
+        if (result == EngagementResult.MissGuidanceLost)
+        {
+            RecordIncident(new EngagementIncident(
+                "guidance_break",
+                $"Missile {missile.MissileTypeName} lost guidance on {preImpactTrack?.TrackId ?? "UNKNOWN"} after countermeasures.",
+                IncidentSeverity.Warning,
+                DateTime.UtcNow,
+                preImpactTrack?.TrackId,
+                target?.Id,
+                missile.WeaponId));
+        }
 
         EngagementCompleted?.Invoke(missile, target, result);
 
@@ -288,31 +407,12 @@ public class WeaponsSystem
         missile.Status = EntityStatus.MissileSelfDestructed;
     }
 
-    public double CalculatePk(SAMBattery battery, TrackFile track)
+    private void RecordIncident(EngagementIncident incident)
     {
-        double pk = battery.MissileSingleShotPk;
-
-        double maxRange = battery.MissileMaxRangeNm;
-        double minRange = battery.MissileMinRangeNm;
-        double rangeFactor = (track.RangeNm - minRange) / (maxRange - minRange);
-        rangeFactor = Math.Clamp(rangeFactor, 0, 1);
-        double rangeModifier = 1.0 - Math.Abs(rangeFactor - 0.4) * 0.5;
-
-        var entity = track.EntityId != null ? _entities.Get(track.EntityId) : null;
-        double ecmMod = 1.0;
-        if (entity is Aircraft a && a.ECMActive && a.EcmPower > 0)
-            ecmMod = 0.6;
-
-        double altFt = track.AltitudeFt;
-        double altMod = altFt < 500 ? 0.5 : 1.0;
-
-        return Math.Clamp(pk * rangeModifier * ecmMod * altMod, 0.05, 0.97);
-    }
-
-    public double CalculateSalvoPk(SAMBattery battery, TrackFile track, int salvoCount)
-    {
-        double singlePk = CalculatePk(battery, track);
-        return 1.0 - Math.Pow(1.0 - singlePk, salvoCount);
+        Incidents.Add(incident);
+        while (Incidents.Count > 40)
+            Incidents.RemoveAt(0);
+        IncidentRecorded?.Invoke(incident);
     }
 
     private void RaiseError(string message)

@@ -138,6 +138,51 @@
                                         <TextBlock Text="{Binding FireControlSupportText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,8,0,0" />
                                     </StackPanel>
                                 </Border>
+                                <Border Style="{StaticResource MilPanel}" Padding="10" Margin="0,0,0,8">
+                                    <StackPanel>
+                                        <TextBlock Text="WEAPONS / LOADOUT" Style="{StaticResource HeaderText}" />
+                                        <TextBlock Text="{Binding WeaponLoadoutSummaryText}" Style="{StaticResource PrimaryText}" Margin="0,8,0,0" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding SelectedWeaponGuidanceText}" Style="{StaticResource AccentText}" Margin="0,4,0,0" />
+                                        <TextBlock Text="{Binding SelectedWeaponEnvelopeText}" Style="{StaticResource SmallText}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding SelectedWeaponSupportText}" Style="{StaticResource SmallText}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding SelectedWeaponCountermeasureText}" Style="{StaticResource SmallText}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding SelectedWeaponDescriptionText}" Style="{StaticResource SubtleText}" Margin="0,8,0,0" TextWrapping="Wrap" />
+                                        <ItemsControl ItemsSource="{Binding WeaponOptions}" Margin="0,10,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="#0B1319"
+                                                            BorderBrush="{StaticResource PanelBorderBrush}"
+                                                            BorderThickness="1"
+                                                            CornerRadius="4"
+                                                            Padding="8,6"
+                                                            Margin="0,0,0,6"
+                                                            ToolTip="{Binding Tooltip}">
+                                                        <StackPanel>
+                                                            <DockPanel LastChildFill="False">
+                                                                <TextBlock Text="{Binding DisplayName}" Style="{StaticResource PrimaryText}" />
+                                                                <TextBlock DockPanel.Dock="Right" Text="{Binding RangeLabel}" Style="{StaticResource SmallText}" />
+                                                            </DockPanel>
+                                                            <TextBlock Text="{Binding GuidanceLabel}" Style="{StaticResource AccentText}" Margin="0,4,0,0" />
+                                                            <TextBlock Text="{Binding Description}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                                            <Button Content="SELECT"
+                                                                    Style="{StaticResource MilButton}"
+                                                                    Margin="0,8,0,0"
+                                                                    Command="{Binding DataContext.SelectWeaponCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock Text="{Binding AbortAvailabilityText}" Style="{StaticResource WarningText}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                        <TextBlock Text="{Binding RecentIncidentSummaryText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                        <Button Content="ABORT ENGAGEMENT"
+                                                Style="{StaticResource MilButton}"
+                                                Command="{Binding AbortSelectedTrackCommand}"
+                                                Margin="0,8,0,0"
+                                                ToolTip="Abort supported missiles already in flight against the selected track when the weapon allows it." />
+                                    </StackPanel>
+                                </Border>
                                 <Border Style="{StaticResource MilPanel}" Padding="10">
                                     <StackPanel>
                                         <TextBlock Text="{Binding SelectedTrackPanelTitle}" Style="{StaticResource HeaderText}" />
@@ -167,6 +212,8 @@
                                         <TextBlock Text="{Binding SelectedTrackControlText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,4,0,0" />
                                         <TextBlock Text="{Binding SelectedTrackKinematicsText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,3,0,0" />
                                         <TextBlock Text="{Binding SelectedTrackDoctrineText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                        <TextBlock Text="{Binding OperationalPictureText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                        <TextBlock Text="{Binding VisibleFriendlyForceText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,4,0,0" />
                                         <WrapPanel Margin="0,10,0,0">
                                             <Button Content="DESIGNATE" Style="{StaticResource MilButton}" Command="{Binding DesignateSelectedCommand}" ToolTip="Set the selected track as the fire-control reference." />
                                             <Button Content="{Binding TrackHoldButtonText}" Style="{StaticResource MilButton}" Command="{Binding ToggleTrackHoldSelectedCommand}" Margin="6,0,0,0" ToolTip="Keep this contact in TWS memory so you can sort multiple targets." />

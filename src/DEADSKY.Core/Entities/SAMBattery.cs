@@ -1,4 +1,5 @@
 using DEADSKY.Core.Physics;
+using DEADSKY.Core.Weapons;
 
 namespace DEADSKY.Core.Entities;
 
@@ -98,7 +99,9 @@ public class SAMBattery : Entity
 
     // ── Missile inventory ──────────────────────────────────────────────
     public int ReserveMissiles { get; set; } = 12;
+    public string CurrentWeaponId { get; set; } = WeaponCatalog.BaselineSarhWeaponId;
     public string CurrentMissileType { get; set; } = "9M38"; // Can be upgraded
+    public List<string> AvailableWeaponIds { get; set; } = new() { WeaponCatalog.BaselineSarhWeaponId };
     public int MissilesFired { get; set; }
     public int ConfirmedKills { get; set; }
     public int Misses { get; set; }
@@ -148,6 +151,8 @@ public class SAMBattery : Entity
                 MissileType = "9M38"
             });
         }
+
+        WeaponCatalog.EnsureBatteryWeapons(this);
     }
 
     public override void Update(double deltaTime)
