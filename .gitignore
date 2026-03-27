@@ -54,3 +54,9 @@ $RECYCLE.BIN/
 
 # Mac
 .DS_Store
+
+# Build artifacts (but keep Assets folder)
+artifacts/*
+!artifacts/current-app/
+artifacts/current-app/*
+!artifacts/current-app/Assets/

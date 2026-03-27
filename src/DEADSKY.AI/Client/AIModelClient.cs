@@ -154,10 +154,12 @@ public class AIModelClient
             maxTokens: maxTokens,
             ct: ct);
 
-        string reply = ExtractStructuredReply(payload);
+        string? reply = StructuredOutputExtractor.ExtractField(payload, "reply");
         if (!string.IsNullOrWhiteSpace(reply))
             return reply;
 
+        Console.Error.WriteLine("[AI] First structured output attempt returned empty, retrying with higher token budget");
+        
         payload = await GetStructuredJsonForMessagesAsync(
             systemPrompt,
             messages,
@@ -165,10 +167,11 @@ public class AIModelClient
             schema,
             strict: true,
             temperature: Math.Min(temperature, 0.35),
-            maxTokens: Math.Max(maxTokens * 3, 160),
+            maxTokens: Math.Max(maxTokens * 2, 256),
             ct: ct);
 
-        return ExtractStructuredReply(payload);
+        reply = StructuredOutputExtractor.ExtractField(payload, "reply");
+        return reply ?? string.Empty;
     }
 
     /// <summary>
@@ -322,7 +325,7 @@ public class AIModelClient
                 json_schema = new
                 {
                     name = schemaName,
-                    strict = strict,
+                    strict = "true",  // Must be string "true", not boolean!
                     schema
                 }
             },
@@ -340,31 +343,27 @@ public class AIModelClient
             var response = await _http.PostAsJsonAsync(ChatCompletionsEndpoint, requestBody, _jsonOpts, ct);
             response.EnsureSuccessStatusCode();
 
-            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-            if (!TryExtractStructuredContent(doc.RootElement, out string content) ||
-                string.IsNullOrWhiteSpace(content))
+            string rawResponse = await response.Content.ReadAsStringAsync(ct);
+            Console.WriteLine($"[AI] RAW STRUCTURED OUTPUT RESPONSE:");
+            Console.WriteLine(rawResponse);
+            Console.WriteLine($"[AI] END RAW RESPONSE");
+
+            using var doc = JsonDocument.Parse(rawResponse);
+            var extracted = StructuredOutputExtractor.ExtractStructuredJson(doc.RootElement);
+            
+            if (extracted == null)
             {
-                Console.Error.WriteLine($"[AI] structured-output: Failed to extract content from response");
+                Console.Error.WriteLine($"[AI] structured-output: Failed to extract JSON from response");
                 return null;
             }
 
-            Console.WriteLine($"[AI] structured-output: Extracted content: {content.Substring(0, Math.Min(200, content.Length))}...");
-            
-            try
+            // Validate schema if required fields specified
+            if (!StructuredOutputExtractor.ValidateSchema(extracted, "reply"))
             {
-                var parsed = JsonNode.Parse(content);
-                if (parsed == null)
-                {
-                    Console.Error.WriteLine($"[AI] structured-output: JsonNode.Parse returned null for content: {content}");
-                }
-                return parsed;
+                Console.Error.WriteLine($"[AI] structured-output: Schema validation failed");
             }
-            catch (JsonException jsonEx)
-            {
-                Console.Error.WriteLine($"[AI] structured-output: JSON parsing failed: {jsonEx.Message}");
-                Console.Error.WriteLine($"[AI] structured-output: Content was: {content}");
-                return null;
-            }
+
+            return extracted;
         }
         catch (Exception ex)
         {
