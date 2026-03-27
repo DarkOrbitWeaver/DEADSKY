@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
@@ -16,6 +16,7 @@ using DEADSKY.Core.Economy;
 using DEADSKY.Core.Entities;
 using DEADSKY.Core.EnemyAI;
 using DEADSKY.Core.Events;
+using DEADSKY.Core.Logging;
 using DEADSKY.Core.Personnel;
 using DEADSKY.Core.Progression;
 using DEADSKY.Core.Radar;
@@ -26,11 +27,12 @@ using DEADSKY.Core.Weapons;
 namespace DEADSKY.App.ViewModels;
 
 /// <summary>
-/// Main ViewModel â€” the single source of truth for the entire UI.
+/// Main ViewModel — the single source of truth for the entire UI.
 /// Owns the SimulationEngine, all game systems, and updates WPF bindings.
 /// </summary>
-public partial class MainViewModel : ObservableObject
+public partial class MainViewModel : ObservableObject, IDisposable
 {
+    private bool _disposed;
     private static readonly HashSet<string> VisibleLogCategories = new(StringComparer.OrdinalIgnoreCase)
     {
         "BRIEF",
@@ -51,7 +53,7 @@ public partial class MainViewModel : ObservableObject
         "SAVE"
     };
 
-    // â”€â”€ Core systems â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Core systems ──────────────────────────────────────────────────
     public SimulationEngine Sim { get; } = new();
     public AudioEngine Audio { get; } = new();
     public ScenarioManager Scenario { get; }
@@ -72,7 +74,22 @@ public partial class MainViewModel : ObservableObject
     private const double CrewRefreshIntervalSec = 0.5;
     private const double SupportDisplayRefreshIntervalSec = 0.5;
 
-    // â”€â”€ Observable state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Event handler references for cleanup
+    private Action<SimulationTickEvent>? _onSimTickHandler;
+    private Action<NewContactEvent>? _onNewContactHandler;
+    private Action<EngagementResultEvent>? _onEngagementResultHandler;
+    private Action<MissileLaunchedEvent>? _onMissileLaunchedHandler;
+    private Action<AlertLevelChangedEvent>? _onAlertChangedHandler;
+    private Action<ROEChangedEvent>? _onROEChangedHandler;
+    private Action<MissionCompletedEvent>? _onMissionCompletedHandler;
+    private Action<BatteryDamagedEvent>? _onBatteryDamagedHandler;
+    private Action<RadioMessage>? _onMessageReceivedHandler;
+    private Action<Soldier, string>? _onCrewEventHandler;
+    private Action<GameEvent>? _onGameEventFiredHandler;
+    private Action<string>? _onWaveSpawnedHandler;
+    private Action<ScenarioManager.MissionOutcome, string>? _onMissionCompleteHandler;
+
+    // ── Observable state ──────────────────────────────────────────────
     [ObservableProperty] private SimulationSnapshot? _currentSnapshot;
     [ObservableProperty] private string _gameTime = "00:00:00 ZULU";
     [ObservableProperty] private string _alertLevelText = "YELLOW";
@@ -116,7 +133,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private int _commandUnreadCount;
     [ObservableProperty] private int _batteryUnreadCount;
     [ObservableProperty] private int _intelUnreadCount;
-    [ObservableProperty] private bool _isCommandMenuOpen = true;
+    [ObservableProperty] private bool _isCommandMenuOpen;
     [ObservableProperty] private bool _isRealisticModeActive;
     [ObservableProperty] private string _realisticModeSummary = "DYNAMIC SHIFT: ready to generate a fresh live scenario.";
 
@@ -143,20 +160,20 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _alertColor = "#FFC800";
     [ObservableProperty] private string _aiStatusColor = "#FFC800";
 
-    // â”€â”€ Message collections â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Message collections ────────────────────────────────────────────
     public ObservableCollection<RadioMessage> CommandNetMessages { get; } = new();
     public ObservableCollection<RadioMessage> BatteryNetMessages { get; } = new();
     public ObservableCollection<RadioMessage> IntelNetMessages { get; } = new();
     public ObservableCollection<RadioMessage> AllMessagesRecent { get; } = new();
     public ObservableCollection<OpsFeedItem> OpsFeed { get; } = new();
 
-    // â”€â”€ Launcher states â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Launcher states ────────────────────────────────────────────────
     public ObservableCollection<LauncherViewModel> LauncherStates { get; } = new();
 
-    // â”€â”€ Threat board â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Threat board ───────────────────────────────────────────────────
     public ObservableCollection<TrackRowViewModel> ThreatBoardTracks { get; } = new();
 
-    // â”€â”€ Crew display â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Crew display ──────────────────────────────────────────────────
     public ObservableCollection<SoldierViewModel> CrewDisplay { get; } = new();
     public string CrewConditionSummaryText => Crew.BuildConditionSummary();
     public string CampaignTheaterText => $"THEATER RECORD: {CurrentSectorState?.TheaterName?.ToUpperInvariant() ?? "NO ACTIVE THEATER"}";
@@ -192,10 +209,11 @@ public partial class MainViewModel : ObservableObject
     public string RealisticModeStatusText => RealisticModeSummary;
     public ScenarioDefinition? CurrentScenarioDefinition => Scenario.CurrentScenario;
 
-    // â”€â”€ Constructor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Constructor ───────────────────────────────────────────────────
 
     public MainViewModel()
     {
+        Sim.Crew = Crew;
         FriendlySupport = new FriendlySupportDirector(Sim.Comms);
         Scenario = new ScenarioManager(Sim);
         Events = new EventEngine(Sim, Crew);
@@ -220,29 +238,46 @@ public partial class MainViewModel : ObservableObject
 
     private void WireSimEvents()
     {
-        // Simulation tick â†’ update UI (called from sim thread, must dispatch)
-        Sim.Events.Subscribe<SimulationTickEvent>(OnSimTick);
-        Sim.Events.Subscribe<NewContactEvent>(OnNewContact);
-        Sim.Events.Subscribe<EngagementResultEvent>(OnEngagementResult);
-        Sim.Events.Subscribe<MissileLaunchedEvent>(OnMissileLaunched);
-        Sim.Events.Subscribe<AlertLevelChangedEvent>(OnAlertChanged);
-        Sim.Events.Subscribe<ROEChangedEvent>(OnROEChanged);
-        Sim.Events.Subscribe<MissionCompletedEvent>(OnMissionCompleted);
-        Sim.Events.Subscribe<BatteryDamagedEvent>(OnBatteryDamaged);
+        // Simulation tick → update UI (called from sim thread, must dispatch)
+        // Store handler references for proper cleanup in Dispose()
+        _onSimTickHandler = OnSimTick;
+        _onNewContactHandler = OnNewContact;
+        _onEngagementResultHandler = OnEngagementResult;
+        _onMissileLaunchedHandler = OnMissileLaunched;
+        _onAlertChangedHandler = OnAlertChanged;
+        _onROEChangedHandler = OnROEChanged;
+        _onMissionCompletedHandler = OnMissionCompleted;
+        _onBatteryDamagedHandler = OnBatteryDamaged;
 
-        Sim.Comms.MessageReceived += OnMessageReceived;
+        Sim.Events.Subscribe(_onSimTickHandler);
+        Sim.Events.Subscribe(_onNewContactHandler);
+        Sim.Events.Subscribe(_onEngagementResultHandler);
+        Sim.Events.Subscribe(_onMissileLaunchedHandler);
+        Sim.Events.Subscribe(_onAlertChangedHandler);
+        Sim.Events.Subscribe(_onROEChangedHandler);
+        Sim.Events.Subscribe(_onMissionCompletedHandler);
+        Sim.Events.Subscribe(_onBatteryDamagedHandler);
 
-        Crew.CrewEventOccurred += OnCrewEvent;
-        Events.EventFired += OnGameEventFired;
+        _onMessageReceivedHandler = OnMessageReceived;
+        Sim.Comms.MessageReceived += _onMessageReceivedHandler;
 
-        Scenario.OnWaveSpawned += wave =>
+        _onCrewEventHandler = OnCrewEvent;
+        Crew.CrewEventOccurred += _onCrewEventHandler;
+        
+        _onGameEventFiredHandler = OnGameEventFired;
+        Events.EventFired += _onGameEventFiredHandler;
+
+        _onWaveSpawnedHandler = wave =>
         {
             DispatchToUI(() => SetStatus($"NEW THREAT: {wave}"));
             LogOps("WAVE", wave);
             Sim.Comms.Queue(CommManager.CreateInterceptMessage($"RAVEN ACTUAL coordinating {wave}."));
         };
-        Scenario.OnMissionComplete += (outcome, reason) =>
+        Scenario.OnWaveSpawned += _onWaveSpawnedHandler;
+        
+        _onMissionCompleteHandler = (outcome, reason) =>
             DispatchToUI(() => OnMissionEnd(outcome, reason));
+        Scenario.OnMissionComplete += _onMissionCompleteHandler;
     }
 
     private async void InitAI()
@@ -264,10 +299,28 @@ public partial class MainViewModel : ObservableObject
         Sim.OnTickForAI = snapshot => AI.Tick(0.1, snapshot);
 
         // Subscribe to new contacts for intel agent
-        Sim.Events.Subscribe<NewContactEvent>(async evt =>
+        // IMPORTANT: Fire-and-forget pattern used here to prevent blocking the simulation thread.
+        // The EventBus invokes handlers synchronously on the simulation thread, so we must NOT await.
+        // AI.HandleNewContactAsync() already has internal busy checks to prevent concurrent execution.
+        Sim.Events.Subscribe<NewContactEvent>(evt =>
         {
             if (AI?.AIAvailable == true)
-                await AI.HandleNewContactAsync(evt.TrackId, Sim.LatestSnapshot);
+            {
+                // Fire-and-forget: initiate async AI processing without blocking
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await AI.HandleNewContactAsync(evt.TrackId, Sim.LatestSnapshot);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Use Console.Error instead of Debug.WriteLine for Release builds
+                        Console.Error.WriteLine($"AI HandleNewContactAsync error: {ex.Message}");
+                        Console.Error.WriteLine($"Stack trace: {ex.StackTrace}");
+                    }
+                });
+            }
         });
     }
 
@@ -328,7 +381,7 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    // â”€â”€ Simulation control commands â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Simulation control commands ───────────────────────────────────
 
     [RelayCommand]
     public async Task RefreshAiStatus()
@@ -472,7 +525,7 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    // â”€â”€ Engagement commands â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Engagement commands ───────────────────────────────────────────
 
     [RelayCommand(CanExecute = nameof(CanDesignate))]
     public void DesignateSelected()
@@ -577,7 +630,7 @@ public partial class MainViewModel : ObservableObject
         RefreshDerivedBindings();
     }
 
-    // â”€â”€ Radar commands â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Radar commands ────────────────────────────────────────────────
 
     [RelayCommand]
     public void SetRadarSearch()
@@ -645,18 +698,12 @@ public partial class MainViewModel : ObservableObject
             SetRadarRange(rangeNm);
     }
 
-    // â”€â”€ Comms commands â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Comms commands ────────────────────────────────────────────────
 
     [RelayCommand]
     public async Task SendMessage()
     {
         if (string.IsNullOrWhiteSpace(InputMessage)) return;
-        if (!IsAiReady())
-        {
-            SetStatus("LM STUDIO MODEL REQUIRED");
-            return;
-        }
-
         await SendPlayerRadioAsync(ActiveChannel, InputMessage.Trim());
         InputMessage = "";
     }
@@ -664,12 +711,6 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanSendQuickCommand))]
     public async Task SendQuickCommand(string commandKey)
     {
-        if (!IsAiReady())
-        {
-            SetStatus("LM STUDIO MODEL REQUIRED");
-            return;
-        }
-
         var route = BuildQuickCommand(commandKey);
         if (route.Message.Length == 0)
         {
@@ -682,12 +723,16 @@ public partial class MainViewModel : ObservableObject
 
     private bool CanSendQuickCommand(string? commandKey) => commandKey switch
     {
-        "ack" => AiAvailable,
-        "picture" => AiAvailable && SimulationRunning,
-        "status" => AiAvailable && CurrentSnapshot != null,
-        "declare" => AiAvailable && SimulationRunning && SelectedTrack != null,
-        "weapons_free" => AiAvailable && SimulationRunning && HostileCount > 0,
-        "intel" => AiAvailable && HostileCount > 0,
+        "ack" => true,
+        "picture" => SimulationRunning,
+        "status" => CurrentSnapshot != null,
+        "declare" => SimulationRunning && SelectedTrack != null,
+        "weapons_free" => SimulationRunning && HostileCount > 0,
+        "intel" => HostileCount > 0,
+        "awacs" => SimulationRunning,
+        "cap" => SimulationRunning,
+        "jam" => SimulationRunning,
+        "battery" => SimulationRunning,
         _ => false
     };
 
@@ -700,7 +745,7 @@ public partial class MainViewModel : ObservableObject
         Audio.Play(SoundEvent.ChannelSwitch);
     }
 
-    // â”€â”€ Track selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Track selection ───────────────────────────────────────────────
 
     public void SelectTrack(string trackId)
     {
@@ -756,7 +801,7 @@ public partial class MainViewModel : ObservableObject
         return 120;
     }
 
-    // â”€â”€ Simulation event handlers (called on sim thread) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Simulation event handlers (called on sim thread) ─────────────
 
     private void OnSimTick(SimulationTickEvent evt)
     {
@@ -917,12 +962,23 @@ public partial class MainViewModel : ObservableObject
 
     private void OnNewContact(NewContactEvent evt)
     {
+        GameLogger.Info("UI-EVENT", $"OnNewContact received: {evt.TrackId} [{evt.Classification}] on thread {Environment.CurrentManagedThreadId}");
+        
         DispatchToUI(() =>
         {
-            Audio.Play(SoundEvent.NewContact);
-            SetStatus($"NEW CONTACT: {evt.TrackId} [{evt.Classification}]");
-            PushNotification("RADAR", "NEW CONTACT", $"{evt.TrackId} classified {evt.Classification}.", NotificationSeverity.Warning);
-            LogOps("CONTACT", $"{evt.TrackId} classified {evt.Classification}.");
+            GameLogger.Info("UI-EVENT", $"OnNewContact UI dispatch executing for {evt.TrackId}");
+            try
+            {
+                Audio.Play(SoundEvent.NewContact);
+                SetStatus($"NEW CONTACT: {evt.TrackId} [{evt.Classification}]");
+                PushNotification("RADAR", "NEW CONTACT", $"{evt.TrackId} classified {evt.Classification}.", NotificationSeverity.Warning);
+                LogOps("CONTACT", $"{evt.TrackId} classified {evt.Classification}.");
+                GameLogger.Info("UI-EVENT", $"OnNewContact completed successfully for {evt.TrackId}");
+            }
+            catch (Exception ex)
+            {
+                GameLogger.Error("UI-EVENT", $"OnNewContact failed for {evt.TrackId}", ex);
+            }
         });
     }
 
@@ -1108,7 +1164,7 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    // â”€â”€ Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Utilities ─────────────────────────────────────────────────────
 
     private void SetStatus(string msg) => StatusMessage = msg;
 
@@ -1125,13 +1181,8 @@ public partial class MainViewModel : ObservableObject
 
     private async Task SendPlayerRadioAsync(RadioChannel channel, string content)
     {
-        if (!IsAiReady())
-        {
-            SetStatus("LM STUDIO MODEL REQUIRED");
-            return;
-        }
-
         int repliesBefore = GetReplyCount(channel);
+        bool aiReady = IsAiReady();
         ActiveChannel = channel;
         var msg = Sim.PlayerSendMessage(channel, content, GetDefaultRecipientCallsign(channel));
         msg.IsRead = true;
@@ -1140,16 +1191,35 @@ public partial class MainViewModel : ObservableObject
         SetStatus($"{channel.ToString().ToUpper()}: {content}");
         ApplyManualMessageConsequences(channel, content);
 
-        if (AI != null)
-            await AI.HandlePlayerMessageAsync(channel, msg.Content, Sim.LatestSnapshot);
+        if (AI != null && aiReady)
+        {
+            try
+            {
+                GameLogger.Info("UI", $"Sending player message to AI on {channel}: {content.Substring(0, Math.Min(50, content.Length))}...");
+                await AI.HandlePlayerMessageAsync(channel, msg.Content, Sim.LatestSnapshot);
+                GameLogger.Info("UI", $"AI response completed for {channel}");
+            }
+            catch (Exception ex)
+            {
+                GameLogger.Error("UI", $"AI HandlePlayerMessageAsync failed on {channel}", ex);
+                SetStatus($"AI ERROR ON {channel.ToString().ToUpper()} - CHECK LOGS");
+                // Don't queue generic error messages - let the AI system handle responses
+            }
+        }
 
         if (channel == RadioChannel.BatteryNet)
             await HandleBatteryNetMessageAsync(content);
 
         FlushPendingRadioTraffic();
 
-        if (GetReplyCount(channel) == repliesBefore)
+        if (!aiReady)
+        {
+            SetStatus($"RADIO SENT ON {channel.ToString().ToUpper()} // AI REPLIES OFFLINE");
+        }
+        else if (GetReplyCount(channel) == repliesBefore)
+        {
             SetStatus($"NO LM STUDIO REPLY ON {channel.ToString().ToUpper()}");
+        }
     }
 
     private (RadioChannel Channel, string Message) BuildQuickCommand(string commandKey) => commandKey switch
@@ -1162,6 +1232,16 @@ public partial class MainViewModel : ObservableObject
             $"ECHO, ALPHA. REQUEST DECLARE {SelectedTrackId}. {BuildTrackBraa(SelectedTrack)}."),
         "weapons_free" => (RadioChannel.CommandNet,
             $"ECHO, ALPHA. REQUEST WEAPONS FREE. {(SelectedTrackId ?? "HOSTILE GROUP")} CLOSING."),
+        "awacs" => (RadioChannel.CommandNet,
+            "ECHO, ALPHA. REQUEST AWACS PICTURE SUPPORT. NEED WIDE-AREA RAID SORT ON CURRENT AXIS."),
+        "cap" => (RadioChannel.CommandNet,
+            $"ECHO, ALPHA. REQUEST CAP DIVERT. {SelectedTrackObjectiveText.Replace("OBJECTIVE: ", string.Empty)} NOW REQUIRES OUTER-SCREEN COVER."),
+        "jam" => (RadioChannel.CommandNet,
+            $"ECHO, ALPHA. REQUEST JAM SUPPORT. {(SelectedTrackId ?? "LEAD PACKAGE")} SHOWING COUNTERMEASURE OR ECM ACTIVITY."),
+        "battery" => (RadioChannel.AirDefenseNet,
+            SelectedTrack != null
+                ? $"BRAVO, ALPHA. REQUEST BATTERY SUPPORT ON {SelectedTrackId}. {BuildTrackBraa(SelectedTrack)}."
+                : "BRAVO, ALPHA. REQUEST CROSSFIRE LANE ON INNER-RING APPROACH."),
         "intel" => (RadioChannel.IntelNet,
             SelectedTrack != null
                 ? $"INTEL, ALPHA. ASSESS {SelectedTrackId}. {BuildTrackBraa(SelectedTrack)}."
@@ -1191,29 +1271,42 @@ public partial class MainViewModel : ObservableObject
 
         var advisory = ContactAdvisor.Build(SelectedTrack);
         var doctrine = PackageDoctrineAdvisor.Build(Scenario.CurrentScenario, SelectedTrack);
-        SelectedTrackBraa = BuildTrackBraa(SelectedTrack);
-        SelectedTrackThreatText = $"{advisory.Callout} | {BuildThreatBand(SelectedTrack.ThreatLevel)}";
-        SelectedTrackIdentityText = $"IDENTITY: {advisory.IdentityLabel}";
-        SelectedTrackPackageText = doctrine.PackageLabel;
-        SelectedTrackRoleText = doctrine.RoleLabel;
-        SelectedTrackObjectiveText = doctrine.ObjectiveLabel;
-        SelectedTrackDoctrineText = doctrine.DoctrineLabel;
-        var fireControl = AssessFireControlState(Sim.LatestSnapshot.Battery, SelectedTrack);
-        var threatState = CurrentSnapshot?.TrackThreatStates.FirstOrDefault(state => state.TrackId == SelectedTrack.TrackId);
+        var pictureContext = OperationalPicture.SelectedTrack;
         var targetAircraft = SelectedTrack.EntityId == null
             ? null
             : CurrentSnapshot?.HostileAircraft.FirstOrDefault(aircraft => aircraft.Id == SelectedTrack.EntityId);
+        string packageLabel = !string.IsNullOrWhiteSpace(targetAircraft?.GroupId)
+            ? targetAircraft!.GroupId!.ToUpperInvariant()
+            : TrimPrefix(doctrine.PackageLabel);
+        string roleLabel = !string.IsNullOrWhiteSpace(targetAircraft?.PackageRoleLabel)
+            ? targetAircraft!.PackageRoleLabel!.ToUpperInvariant()
+            : TrimPrefix(doctrine.RoleLabel);
+        string objectiveLabel = !string.IsNullOrWhiteSpace(targetAircraft?.MissionObjectiveName)
+            ? targetAircraft!.MissionObjectiveName!.ToUpperInvariant()
+            : TrimPrefix(doctrine.ObjectiveLabel);
+        string entryLabel = !string.IsNullOrWhiteSpace(targetAircraft?.EntryLabel)
+            ? targetAircraft!.EntryLabel!.ToUpperInvariant()
+            : TrimPrefix(doctrine.RouteLabel);
+        SelectedTrackBraa = BuildTrackBraa(SelectedTrack);
+        SelectedTrackThreatText = $"{advisory.Callout} | {BuildThreatBand(SelectedTrack.ThreatLevel)}";
+        SelectedTrackIdentityText = $"IDENTITY: {advisory.IdentityLabel}";
+        SelectedTrackPackageText = $"PACKAGE: {packageLabel}";
+        SelectedTrackRoleText = $"ROLE: {roleLabel}";
+        SelectedTrackObjectiveText = $"OBJECTIVE: {objectiveLabel}";
+        SelectedTrackDoctrineText = pictureContext?.DoctrineSummary ?? doctrine.DoctrineLabel;
+        var fireControl = AssessFireControlState(Sim.LatestSnapshot.Battery, SelectedTrack);
+        var threatState = CurrentSnapshot?.TrackThreatStates.FirstOrDefault(state => state.TrackId == SelectedTrack.TrackId);
         string countermeasureState = targetAircraft == null
             ? "CM CLEAN"
             : targetAircraft.IsChaffActive || targetAircraft.IsFlareActive || targetAircraft.ECMActive
                 ? $"CM ACTIVE {(targetAircraft.IsChaffActive ? "CHAFF " : string.Empty)}{(targetAircraft.IsFlareActive ? "FLARE " : string.Empty)}{(targetAircraft.ECMActive ? "ECM" : string.Empty)}".Trim()
                 : "CM CLEAN";
-        SelectedTrackStatusText = $"STATUS: {advisory.StateLabel} | {advisory.TagsText} | {(threatState?.Summary ?? "SEARCH PICTURE")}";
-        SelectedTrackMissionText = $"MISSION: {TrimPrefix(doctrine.PackageLabel)} | {TrimPrefix(doctrine.RoleLabel)} | {TrimPrefix(doctrine.ObjectiveLabel)}";
-        SelectedTrackControlText = $"CONTROL: {BuildTrackRetentionLabel(SelectedTrack)} | {fireControl.FireStatusText} | {countermeasureState} | {AbortAvailabilityText.Replace("ABORT: ", string.Empty)}";
+        SelectedTrackStatusText = $"STATUS: {advisory.StateLabel} | {advisory.TagsText} | {(pictureContext?.RecommendedAction ?? threatState?.Summary ?? "SEARCH PICTURE")}";
+        SelectedTrackMissionText = $"MISSION: {packageLabel} | {roleLabel} | {objectiveLabel} | AXIS {entryLabel}";
+        SelectedTrackControlText = $"CONTROL: {BuildTrackRetentionLabel(SelectedTrack)} | {fireControl.FireStatusText} | {countermeasureState} | {AbortAvailabilityText.Replace("ABORT: ", string.Empty)} | {(pictureContext?.CommandCaveats ?? string.Empty)}".TrimEnd();
         SelectedTrackKinematicsText = $"KINEMATICS: ALT {SelectedTrack.AltitudeFt / 1000:0.0}KFT | SPD {SelectedTrack.SpeedKts:0}KT | UNC {SelectedTrack.PositionUncertaintyM / 1000:0.0}KM | {(CurrentSnapshot?.SelectedWeapon?.ShortCode ?? "9M38")}";
         SelectedTrackTimeToThreatText = advisory.TimeToThreatText;
-        SelectedTrackEnvelopeText = $"FIRE CONTROL: {fireControl.FireStatusText} | {fireControl.LockStatusText} | {fireControl.RangeStatusText}";
+        SelectedTrackEnvelopeText = $"FIRE CONTROL: {fireControl.FireStatusText} | {fireControl.LockStatusText} | {fireControl.RangeStatusText} | {(pictureContext?.WeaponGating ?? "NO SHOT DATA")}";
     }
 
     private void RefreshCommandStates()
@@ -1494,12 +1587,6 @@ public partial class MainViewModel : ObservableObject
 
     private async Task HandleBatteryNetMessageAsync(string content)
     {
-        if (!IsAiReady())
-        {
-            SetStatus("LM STUDIO MODEL REQUIRED");
-            return;
-        }
-
         var responder = CrewRadioDirector.SelectResponder(Crew, content);
         string line = "";
 
@@ -1508,15 +1595,12 @@ public partial class MainViewModel : ObservableObject
             line = await AI.CrewAgent.GenerateCrewLine(
                 responder.FullName,
                 CrewRadioDirector.GetPersonalitySummary(responder),
-                $"Player battery-net message: {content}. {MissionPhaseText}. {RecommendationText}.",
+                $"Player battery-net message: {content}. {MissionPhaseText}. {RecommendationText}. {SelectedTrackControlText}. {SelectedTrackEnvelopeText}. {SupportConsequenceText}. {RecentIncidentSummaryText}.",
                 Sim.LatestSnapshot);
         }
 
         if (string.IsNullOrWhiteSpace(line))
-        {
-            SetStatus("NO LM STUDIO BATTERY-NET REPLY");
-            return;
-        }
+            line = BuildFallbackCrewLine(responder, content);
 
         Sim.Comms.Queue(CommManager.CreateCrewMessage(responder.FullName, line));
     }
@@ -1573,12 +1657,44 @@ public partial class MainViewModel : ObservableObject
     private static string BuildWeatherSummary(SimulationSnapshot snapshot) =>
         $"WX {snapshot.Weather.Description.ToUpper()} | VIS {snapshot.Weather.VisibilityNm:0}NM | CEIL {snapshot.Weather.CloudCeilingFt:0}FT";
 
+    private string BuildFallbackCrewLine(Soldier responder, string content)
+    {
+        string normalized = content.ToLowerInvariant();
+        return responder.Role switch
+        {
+            SoldierRole.RadarOperator when normalized.Contains("picture", StringComparison.Ordinal) || normalized.Contains("track", StringComparison.Ordinal)
+                => $"Alpha copies. {AirPictureText}. {SelectedTrackBraa}.",
+            SoldierRole.FireControl when normalized.Contains("fire", StringComparison.Ordinal) || normalized.Contains("engage", StringComparison.Ordinal) || normalized.Contains("designate", StringComparison.Ordinal)
+                => $"Fire control copies. {SelectedTrackEnvelopeText}. {AbortAvailabilityText}.",
+            SoldierRole.LauncherChief when normalized.Contains("launcher", StringComparison.Ordinal) || normalized.Contains("missile", StringComparison.Ordinal) || normalized.Contains("reload", StringComparison.Ordinal)
+                => $"Launchers report {ReadyLaunchers} ready and {ReserveMissiles} reserve. {SelectedWeaponReadinessText}.",
+            SoldierRole.Signals when normalized.Contains("radio", StringComparison.Ordinal) || normalized.Contains("net", StringComparison.Ordinal) || normalized.Contains("support", StringComparison.Ordinal)
+                => $"Signals copies. {SupportConsequenceText} {CommandConfidenceText}.",
+            _ => $"Command copies. {RecommendationText}. {SelectedTrackControlText}."
+        };
+    }
+
     private static void DispatchToUI(Action action)
     {
-        if (Application.Current?.Dispatcher.CheckAccess() == true)
+        GameLogger.Debug("UI-DISPATCH", $"DispatchToUI called on thread {Environment.CurrentManagedThreadId}");
+        
+        if (Application.Current?.Dispatcher == null)
+        {
+            GameLogger.Warning("UI-DISPATCH", "Application.Current.Dispatcher is null, cannot dispatch");
+            return;
+        }
+
+        if (Application.Current.Dispatcher.CheckAccess())
+        {
+            GameLogger.Debug("UI-DISPATCH", "Already on UI thread, executing directly");
             action();
+        }
         else
-            Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.Render, action);
+        {
+            GameLogger.Debug("UI-DISPATCH", "Not on UI thread, dispatching with Normal priority");
+            // CRITICAL FIX: Use Normal priority instead of Background to prevent UI freeze
+            Application.Current.Dispatcher.Invoke(action, DispatcherPriority.Normal);
+        }
     }
 
     private ObservableCollection<RadioMessage> GetChannelMessages(RadioChannel channel) => channel switch
@@ -1759,6 +1875,46 @@ public partial class MainViewModel : ObservableObject
 
         Sim.RefreshSnapshot();
         RefreshFromSimulationSnapshot();
+    }
+
+    // -- Disposal --------------------------------------------------------------
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        // Unsubscribe from all events to prevent memory leaks
+        if (_onSimTickHandler != null)
+            Sim.Events.Unsubscribe(_onSimTickHandler);
+        if (_onNewContactHandler != null)
+            Sim.Events.Unsubscribe(_onNewContactHandler);
+        if (_onEngagementResultHandler != null)
+            Sim.Events.Unsubscribe(_onEngagementResultHandler);
+        if (_onMissileLaunchedHandler != null)
+            Sim.Events.Unsubscribe(_onMissileLaunchedHandler);
+        if (_onAlertChangedHandler != null)
+            Sim.Events.Unsubscribe(_onAlertChangedHandler);
+        if (_onROEChangedHandler != null)
+            Sim.Events.Unsubscribe(_onROEChangedHandler);
+        if (_onMissionCompletedHandler != null)
+            Sim.Events.Unsubscribe(_onMissionCompletedHandler);
+        if (_onBatteryDamagedHandler != null)
+            Sim.Events.Unsubscribe(_onBatteryDamagedHandler);
+
+        if (_onMessageReceivedHandler != null)
+            Sim.Comms.MessageReceived -= _onMessageReceivedHandler;
+        if (_onCrewEventHandler != null)
+            Crew.CrewEventOccurred -= _onCrewEventHandler;
+        if (_onGameEventFiredHandler != null)
+            Events.EventFired -= _onGameEventFiredHandler;
+        if (_onWaveSpawnedHandler != null)
+            Scenario.OnWaveSpawned -= _onWaveSpawnedHandler;
+        if (_onMissionCompleteHandler != null)
+            Scenario.OnMissionComplete -= _onMissionCompleteHandler;
+
+        // Dispose owned resources
+        Sim.Dispose();
     }
 
 }

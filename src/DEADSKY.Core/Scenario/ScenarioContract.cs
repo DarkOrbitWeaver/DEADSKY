@@ -77,6 +77,18 @@ public sealed record ScenarioContractValidation(
 
 public static class ScenarioContractValidator
 {
+    private static readonly HashSet<string> SupportedLandmarkCategories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ridge",
+        "river",
+        "terrain",
+        "approach",
+        "urban",
+        "coast",
+        "forest",
+        "pass"
+    };
+
     public static ScenarioContract FromScenario(ScenarioDefinition scenario) => new()
     {
         Name = scenario.Name,
@@ -183,8 +195,40 @@ public static class ScenarioContractValidator
         return new ScenarioContractValidation(errors.Count == 0, errors, warnings);
     }
 
-    public static ScenarioContractValidation ValidateScenario(ScenarioDefinition scenario) =>
-        Validate(FromScenario(scenario));
+    public static ScenarioContractValidation ValidateScenario(ScenarioDefinition scenario)
+    {
+        var contractValidation = Validate(FromScenario(scenario));
+        var errors = contractValidation.Errors.ToList();
+        var warnings = contractValidation.Warnings.ToList();
+
+        if (string.IsNullOrWhiteSpace(scenario.SectorMap.TheaterName))
+            errors.Add("Scenario theater name is required for tactical map rendering.");
+
+        foreach (var objective in scenario.SectorMap.Objectives)
+        {
+            if (string.IsNullOrWhiteSpace(objective.Id) || string.IsNullOrWhiteSpace(objective.Name))
+                errors.Add("Every tactical objective needs an id and display name.");
+
+            if (!objective.Importance.Equals("primary", StringComparison.OrdinalIgnoreCase) &&
+                !objective.Importance.Equals("secondary", StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add($"Objective {objective.Name} uses unsupported importance '{objective.Importance}'.");
+            }
+        }
+
+        foreach (var landmark in scenario.SectorMap.Landmarks)
+        {
+            if (!SupportedLandmarkCategories.Contains(landmark.Category))
+            {
+                errors.Add($"Landmark {landmark.Name} uses unsupported category '{landmark.Category}'.");
+            }
+        }
+
+        if (scenario.SectorMap.Landmarks.Count == 0)
+            warnings.Add("Scenario has no landmark notes; tactical map will rely only on objectives and tracks.");
+
+        return new ScenarioContractValidation(errors.Count == 0, errors, warnings);
+    }
 
     private static List<string> BuildDoctrineTags(WaveConfig wave)
     {

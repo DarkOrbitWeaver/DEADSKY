@@ -22,7 +22,7 @@ public class AIModelClient
         Environment.GetEnvironmentVariable("DEADSKY_AI_ENDPOINT") ?? "http://localhost:1234/v1/chat/completions";
     public static double DefaultTemperature { get; set; } = 0.25;
     public static int DefaultMaxTokens { get; set; } = 512;
-    public static int DefaultToolMaxTokens { get; set; } = GetEnvInt("DEADSKY_AI_TOOL_MAX_TOKENS", 96);
+    public static int DefaultToolMaxTokens { get; set; } = GetEnvInt("DEADSKY_AI_TOOL_MAX_TOKENS", 512);
     public static string ChatCompletionsEndpoint => ResolveEndpoint("/v1/chat/completions");
     public static string ModelsEndpoint => ResolveEndpoint("/v1/models");
     // ──────────────────────────────────────────────────────────────────
@@ -61,6 +61,7 @@ public class AIModelClient
         CancellationToken ct = default)
     {
         TotalRequestsMade++;
+        int effectiveMaxTokens = maxTokens ?? (tools is { Count: > 0 } ? DefaultToolMaxTokens : DefaultMaxTokens);
 
         var requestMessages = new List<object>
         {
@@ -73,7 +74,7 @@ public class AIModelClient
             ["model"] = ModelIdentifier,
             ["messages"] = requestMessages,
             ["temperature"] = temperature ?? DefaultTemperature,
-            ["max_tokens"] = maxTokens ?? (tools is { Count: > 0 } ? DefaultToolMaxTokens : DefaultMaxTokens),
+            ["max_tokens"] = effectiveMaxTokens,
             ["stream"] = false
         };
 
@@ -82,6 +83,8 @@ public class AIModelClient
             requestBody["tools"] = tools.Select(BuildToolPayload).ToList();
             requestBody["tool_choice"] = "auto";
         }
+
+        Console.WriteLine($"[AI] ChatAsync: messages={messages.Count}, tools={tools?.Count ?? 0}, maxTokens={effectiveMaxTokens}");
 
         bool gateHeld = false;
         try
@@ -93,12 +96,18 @@ public class AIModelClient
             response.EnsureSuccessStatusCode();
 
             var raw = await response.Content.ReadAsStringAsync(ct);
-            return ParseResponse(raw, toolCallsExpected: tools is { Count: > 0 });
+            var aiResponse = ParseResponse(raw, toolCallsExpected: tools is { Count: > 0 });
+            
+            Console.WriteLine($"[AI] ChatAsync response: finishReason={aiResponse.FinishReason}, promptTokens={aiResponse.PromptTokens}, completionTokens={aiResponse.CompletionTokens}, hasToolCalls={aiResponse.HasToolCalls}");
+            
+            return aiResponse;
         }
         catch (Exception ex)
         {
             TotalErrors++;
             IsAvailable = ex is not TaskCanceledException;
+            Console.Error.WriteLine($"[AI] ChatAsync error: {ex.Message}");
+            Console.Error.WriteLine($"[AI] Stack trace: {ex.StackTrace}");
             return new AIResponse { Error = ex.Message, IsError = true };
         }
         finally
@@ -268,6 +277,13 @@ public class AIModelClient
             ? finishReason.GetString() ?? string.Empty
             : string.Empty;
 
+        // Log warning if response was truncated due to token limit
+        if (response.FinishReason == "length")
+        {
+            Console.Error.WriteLine($"[AI] WARNING: Response truncated due to token limit. Completion tokens: {response.CompletionTokens}");
+            Console.Error.WriteLine($"[AI] Consider increasing DefaultToolMaxTokens (currently {DefaultToolMaxTokens}) or max_tokens parameter");
+        }
+
         // Extract usage
         if (doc.RootElement.TryGetProperty("usage", out var usage))
         {
@@ -328,15 +344,33 @@ public class AIModelClient
             if (!TryExtractStructuredContent(doc.RootElement, out string content) ||
                 string.IsNullOrWhiteSpace(content))
             {
+                Console.Error.WriteLine($"[AI] structured-output: Failed to extract content from response");
                 return null;
             }
 
-            return JsonNode.Parse(content);
+            Console.WriteLine($"[AI] structured-output: Extracted content: {content.Substring(0, Math.Min(200, content.Length))}...");
+            
+            try
+            {
+                var parsed = JsonNode.Parse(content);
+                if (parsed == null)
+                {
+                    Console.Error.WriteLine($"[AI] structured-output: JsonNode.Parse returned null for content: {content}");
+                }
+                return parsed;
+            }
+            catch (JsonException jsonEx)
+            {
+                Console.Error.WriteLine($"[AI] structured-output: JSON parsing failed: {jsonEx.Message}");
+                Console.Error.WriteLine($"[AI] structured-output: Content was: {content}");
+                return null;
+            }
         }
         catch (Exception ex)
         {
             TotalErrors++;
             Console.Error.WriteLine($"[AI] structured-output error: {ex.Message}");
+            Console.Error.WriteLine($"[AI] structured-output stack trace: {ex.StackTrace}");
             return null;
         }
         finally

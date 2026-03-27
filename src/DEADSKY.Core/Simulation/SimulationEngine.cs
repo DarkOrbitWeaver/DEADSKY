@@ -1,5 +1,7 @@
 using DEADSKY.Core.Comms;
 using DEADSKY.Core.Entities;
+using DEADSKY.Core.Logging;
+using DEADSKY.Core.Personnel;
 using DEADSKY.Core.Radar;
 using DEADSKY.Core.Scenario;
 using DEADSKY.Core.Weapons;
@@ -11,9 +13,11 @@ public sealed class SimulationEngine : IDisposable
     private static readonly double[] SupportedRadarRangesNm = [40, 80, 120];
     private readonly System.Timers.Timer _timer;
     private readonly object _tickLock = new();
+    private readonly object _snapshotLock = new();
     private bool _running;
     private int _tickCount;
     private DateTime? _pausedAtUtc;
+    private SimulationSnapshot _latestSnapshot = new();
 
     public EntityManager Entities { get; } = new();
     public RadarSystem Radar { get; } = new();
@@ -21,8 +25,21 @@ public sealed class SimulationEngine : IDisposable
     public EventBus Events { get; } = new();
     public WeaponsSystem Weapons { get; }
     public WeatherState Weather { get; } = new();
+    public CrewRoster? Crew { get; set; }
     public double GameTimeSec { get; private set; }
-    public SimulationSnapshot LatestSnapshot { get; private set; } = new();
+    public SimulationSnapshot LatestSnapshot 
+    { 
+        get 
+        { 
+            lock (_snapshotLock) 
+                return _latestSnapshot; 
+        } 
+        private set 
+        { 
+            lock (_snapshotLock) 
+                _latestSnapshot = value; 
+        } 
+    }
     public Action<SimulationSnapshot>? OnTickForAI { get; set; }
 
     public SimulationEngine()
@@ -301,19 +318,39 @@ public sealed class SimulationEngine : IDisposable
 
         lock (_tickLock)
         {
+            GameLogger.Debug("SIM-TICK", $"Tick start: GameTime={GameTimeSec:F2}s, Delta={deltaTime:F3}s, Tick#{_tickCount}");
+            
             GameTimeSec += deltaTime;
 
             var battery = Entities.GetPlayerBattery();
+            
+            GameLogger.Debug("SIM-TICK", "Updating weapons system");
             Weapons.Update(deltaTime);
+            
+            GameLogger.Debug("SIM-TICK", "Updating entities");
             Entities.UpdateAll(deltaTime);
+            
+            GameLogger.Debug("SIM-TICK", "Updating radar");
             Radar.Update(deltaTime, Entities.GetActiveSnapshot(), Weather.PrecipitationMmHr, battery);
+            
+            GameLogger.Debug("SIM-TICK", "Processing comms queue");
             Comms.ProcessQueue();
 
+            GameLogger.Debug("SIM-TICK", "Building snapshot");
             BuildSnapshot();
 
             _tickCount++;
+            
+            GameLogger.Debug("SIM-TICK", $"Publishing SimulationTickEvent (tick #{_tickCount})");
             Events.Publish(new SimulationTickEvent(GameTimeSec, deltaTime, _tickCount));
-            OnTickForAI?.Invoke(LatestSnapshot);
+            
+            if (OnTickForAI != null)
+            {
+                GameLogger.Debug("SIM-TICK", "Invoking AI tick callback");
+                OnTickForAI.Invoke(LatestSnapshot);
+            }
+            
+            GameLogger.Debug("SIM-TICK", $"Tick complete: GameTime={GameTimeSec:F2}s");
         }
     }
 
@@ -386,6 +423,7 @@ public sealed class SimulationEngine : IDisposable
             GameTimeSec = GameTimeSec,
             GameTimeString = TimeSpan.FromSeconds(GameTimeSec).ToString(@"hh\:mm\:ss") + " ZULU",
             Battery = battery == null ? null : CloneBattery(battery),
+            Crew = Crew,
             AllTracks = trackSnapshot,
             FirmTracks = trackSnapshot.Where(track => track.Quality != TrackQuality.Lost).ToList(),
             HostileTracks = trackSnapshot.Where(track =>
@@ -410,6 +448,7 @@ public sealed class SimulationEngine : IDisposable
             GameTimeSec = snapshotSeed.GameTimeSec,
             GameTimeString = snapshotSeed.GameTimeString,
             Battery = snapshotSeed.Battery,
+            Crew = snapshotSeed.Crew,
             AllTracks = snapshotSeed.AllTracks,
             FirmTracks = snapshotSeed.FirmTracks,
             HostileTracks = snapshotSeed.HostileTracks,
@@ -565,9 +604,16 @@ public sealed class SimulationEngine : IDisposable
             GroupId = aircraft.GroupId,
             FormationLeaderId = aircraft.FormationLeaderId,
             FormationSlot = aircraft.FormationSlot,
+            PackageRoleLabel = aircraft.PackageRoleLabel,
+            MissionObjectiveId = aircraft.MissionObjectiveId,
+            MissionObjectiveName = aircraft.MissionObjectiveName,
+            EntryLabel = aircraft.EntryLabel,
+            ObjectivePosition = aircraft.ObjectivePosition,
             RadarLockDetected = aircraft.RadarLockDetected,
             RadarLockBearingDeg = aircraft.RadarLockBearingDeg,
             RadarLockDetectedTime = aircraft.RadarLockDetectedTime,
+            HardLockDetected = aircraft.HardLockDetected,
+            HardLockDetectedTime = aircraft.HardLockDetectedTime,
             MissileInbound = aircraft.MissileInbound,
             MissileInboundDetectedTime = aircraft.MissileInboundDetectedTime,
             ChaffCharges = aircraft.ChaffCharges,

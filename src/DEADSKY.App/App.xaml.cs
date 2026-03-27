@@ -2,6 +2,7 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Threading;
+using DEADSKY.Core.Logging;
 
 namespace DEADSKY.App;
 
@@ -18,24 +19,41 @@ public partial class App : Application
 
     public App()
     {
+        // Initialize comprehensive game logging first
+        GameLogger.Initialize();
+        GameLogger.Info("APP", "DEADSKY application starting...");
+
         AppDomain.CurrentDomain.UnhandledException += OnCurrentDomainUnhandledException;
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+        GameLogger.Info("APP", "Exception handlers registered");
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        GameLogger.Info("APP", $"Application exiting with code {e.ApplicationExitCode}");
+        GameLogger.Shutdown();
+        base.OnExit(e);
     }
 
     private static void OnCurrentDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
-        LogCrash("APPDOMAIN", e.ExceptionObject as Exception, $"IsTerminating={e.IsTerminating}");
+        var ex = e.ExceptionObject as Exception;
+        GameLogger.Critical("APP", $"Unhandled AppDomain exception (IsTerminating={e.IsTerminating})", ex);
+        LogCrash("APPDOMAIN", ex, $"IsTerminating={e.IsTerminating}");
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
+        GameLogger.Critical("APP", "Unhandled Dispatcher exception", e.Exception);
         LogCrash("DISPATCHER", e.Exception);
         e.Handled = true;
     }
 
     private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
+        GameLogger.Critical("APP", "Unobserved Task exception", e.Exception);
         LogCrash("TASK", e.Exception);
         e.SetObserved();
     }

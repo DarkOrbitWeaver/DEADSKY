@@ -1,0 +1,144 @@
+<Window x:Class="DEADSKY.App.Views.LogisticsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DEADSKY Armory and Logistics"
+        Width="1080"
+        Height="760"
+        MinWidth="920"
+        MinHeight="620"
+        Background="{StaticResource ConsoleBgBrush}"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource MilPanel}" Padding="12" Margin="0,0,0,12">
+            <DockPanel LastChildFill="True">
+                <StackPanel DockPanel.Dock="Left">
+                    <TextBlock Text="ARMORY / LOGISTICS CONSOLE" Style="{StaticResource HeaderText}"/>
+                    <TextBlock Text="Campaign persistence, requisition flow, and armory decisions now live in their own console instead of crowding the combat station." Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                </StackPanel>
+                <Button DockPanel.Dock="Right"
+                        Content="SAVE PROFILE"
+                        Style="{StaticResource MilButton}"
+                        Command="{Binding SaveCampaignNowCommand}"/>
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.05*"/>
+                <ColumnDefinition Width="1.75*"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0">
+                <Border Style="{StaticResource MilAccentCard}" BorderBrush="{StaticResource CardAccentBlueBrush}" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="{Binding ArmoryHeadlineText}" Style="{StaticResource HeaderText}"/>
+                        <TextBlock Text="{Binding LogisticsTempoText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        <TextBlock Text="{Binding CampaignPersistenceSummaryText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                        <TextBlock Text="{Binding CampaignSavePathText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <UniformGrid Rows="1" Columns="3" Margin="0,0,0,12">
+                    <Border Style="{StaticResource MilMetricCard}" Margin="0,0,8,0">
+                        <StackPanel>
+                            <TextBlock Text="BUDGET" Style="{StaticResource MetricLabelText}"/>
+                            <TextBlock Text="{Binding BudgetDisplayText}" Style="{StaticResource PrimaryText}" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource MilMetricCard}" Margin="0,0,8,0">
+                        <StackPanel>
+                            <TextBlock Text="RANK" Style="{StaticResource MetricLabelText}"/>
+                            <TextBlock Text="{Binding PlayerRankDisplayText}" Style="{StaticResource PrimaryText}" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource MilMetricCard}">
+                        <StackPanel>
+                            <TextBlock Text="CAREER" Style="{StaticResource MetricLabelText}"/>
+                            <TextBlock Text="{Binding CareerSummaryText}" Style="{StaticResource SmallText}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                </UniformGrid>
+
+                <Border Style="{StaticResource MilInsetCard}">
+                    <StackPanel>
+                        <TextBlock Text="CURRENT STOCK" Style="{StaticResource HeaderText}"/>
+                        <TextBlock Text="{Binding OwnedUpgradeSummaryText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        <TextBlock Text="{Binding PendingDeliverySummaryText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                        <TextBlock Text="{Binding LogisticsStatusText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                        <TextBlock Text="{Binding StoreAvailabilityText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <ScrollViewer Grid.Column="1" Margin="14,0,0,0" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="REQUISITION BOARD" Style="{StaticResource HeaderText}" Margin="0,0,0,10"/>
+                    <ItemsControl ItemsSource="{Binding RequisitionOptions}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border x:Name="ReqCard"
+                                        Style="{StaticResource MilInsetCard}"
+                                        Margin="0,0,0,10">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                                            <WrapPanel>
+                                                <Border Style="{StaticResource ChipBorder}" Background="#112130" BorderBrush="{StaticResource CardAccentBlueBrush}">
+                                                    <TextBlock Text="{Binding CategoryBadgeText}" Style="{StaticResource ChipText}"/>
+                                                </Border>
+                                                <Border Style="{StaticResource ChipBorder}" Background="#172315" BorderBrush="{StaticResource CardAccentGreenBrush}">
+                                                    <TextBlock Text="{Binding AvailabilityText}" Style="{StaticResource ChipText}"/>
+                                                </Border>
+                                            </WrapPanel>
+                                            <TextBlock Text="{Binding DisplayName}" Style="{StaticResource PrimaryText}" Margin="0,6,0,0"/>
+                                            <TextBlock Text="{Binding Description}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                            <TextBlock Text="{Binding ImpactText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                            <WrapPanel Margin="0,8,0,0">
+                                                <Border Style="{StaticResource ChipBorder}" Background="#241C13" BorderBrush="{StaticResource CardAccentAmberBrush}">
+                                                    <TextBlock Text="{Binding RequirementText}" Style="{StaticResource ChipText}"/>
+                                                </Border>
+                                                <Border Style="{StaticResource ChipBorder}" Background="#131B24" BorderBrush="{StaticResource PanelBorderBrush}">
+                                                    <TextBlock Text="{Binding LeadTimeText}" Style="{StaticResource ChipText}"/>
+                                                </Border>
+                                            </WrapPanel>
+                                            <TextBlock Text="{Binding StatusText}" Style="{StaticResource SubtleText}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" HorizontalAlignment="Right">
+                                            <TextBlock Text="{Binding CostText}" Style="{StaticResource WarningText}" HorizontalAlignment="Right"/>
+                                            <Button Content="{Binding OrderActionText}"
+                                                    Style="{StaticResource MilButton}"
+                                                    Margin="0,10,0,0"
+                                                    MinWidth="96"
+                                                    Command="{Binding DataContext.PurchaseUpgradeCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding Id}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding IsOwned}" Value="True">
+                                        <Setter TargetName="ReqCard" Property="BorderBrush" Value="{StaticResource CardAccentGreenBrush}"/>
+                                        <Setter TargetName="ReqCard" Property="Background" Value="#112016"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsAvailable}" Value="True">
+                                        <Setter TargetName="ReqCard" Property="BorderBrush" Value="{StaticResource CardAccentBlueBrush}"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsRankLocked}" Value="True">
+                                        <Setter TargetName="ReqCard" Property="BorderBrush" Value="{StaticResource CardAccentAmberBrush}"/>
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

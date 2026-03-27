@@ -1,3 +1,6 @@
+using DEADSKY.Core.Logging;
+using System.Diagnostics;
+
 namespace DEADSKY.Core.Simulation;
 
 /// <summary>
@@ -16,33 +19,70 @@ public class EventBus
         if (!_handlers.TryGetValue(type, out var list))
             _handlers[type] = list = new();
         list.Add(handler);
+        GameLogger.Debug("EVENTBUS", $"Subscribed to {type.Name} (total handlers: {list.Count})");
     }
 
     public void Unsubscribe<T>(Action<T> handler)
     {
         var type = typeof(T);
         if (_handlers.TryGetValue(type, out var list))
+        {
             list.Remove(handler);
+            GameLogger.Debug("EVENTBUS", $"Unsubscribed from {type.Name} (remaining handlers: {list.Count})");
+        }
     }
 
     public void Publish<T>(T eventData)
     {
         var type = typeof(T);
-        if (!_handlers.TryGetValue(type, out var list)) return;
+        if (!_handlers.TryGetValue(type, out var list))
+        {
+            GameLogger.Debug("EVENTBUS", $"Published {type.Name} with no handlers");
+            return;
+        }
+
+        var handlerCount = list.Count;
+        GameLogger.Info("EVENTBUS", $"Publishing {type.Name} to {handlerCount} handler(s): {eventData}");
+
+        var sw = Stopwatch.StartNew();
 
         // Snapshot to avoid modification during iteration
-        foreach (var handler in list.ToList())
+        var handlers = list.ToList();
+        for (int i = 0; i < handlers.Count; i++)
         {
-            try { ((Action<T>)handler)(eventData); }
+            var handler = handlers[i];
+            var handlerSw = Stopwatch.StartNew();
+            try
+            {
+                ((Action<T>)handler)(eventData);
+                handlerSw.Stop();
+                
+                if (handlerSw.ElapsedMilliseconds > 10)
+                {
+                    GameLogger.Warning("EVENTBUS", $"Handler {i + 1}/{handlerCount} for {type.Name} took {handlerSw.ElapsedMilliseconds}ms (slow!)");
+                }
+                else
+                {
+                    GameLogger.Debug("EVENTBUS", $"Handler {i + 1}/{handlerCount} for {type.Name} completed in {handlerSw.ElapsedMilliseconds}ms");
+                }
+            }
             catch (Exception ex)
             {
+                handlerSw.Stop();
                 // Don't let one bad handler crash the simulation
-                Console.Error.WriteLine($"EventBus handler error for {type.Name}: {ex.Message}");
+                GameLogger.Error("EVENTBUS", $"Handler {i + 1}/{handlerCount} for {type.Name} failed after {handlerSw.ElapsedMilliseconds}ms", ex);
             }
         }
+
+        sw.Stop();
+        GameLogger.Info("EVENTBUS", $"Completed {type.Name} publish in {sw.ElapsedMilliseconds}ms (all {handlerCount} handlers)");
     }
 
-    public void Clear() => _handlers.Clear();
+    public void Clear()
+    {
+        GameLogger.Info("EVENTBUS", "Clearing all event handlers");
+        _handlers.Clear();
+    }
 }
 
 // ── Standard game events ──────────────────────────────────────────────────

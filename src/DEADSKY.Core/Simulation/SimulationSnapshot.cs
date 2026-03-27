@@ -1,4 +1,5 @@
 using DEADSKY.Core.Entities;
+using DEADSKY.Core.Personnel;
 using DEADSKY.Core.Radar;
 using DEADSKY.Core.Weapons;
 
@@ -29,6 +30,7 @@ public sealed class SimulationSnapshot
     public double GameTimeSec { get; init; }
     public string GameTimeString { get; init; } = "00:00:00 ZULU";
     public SAMBattery? Battery { get; init; }
+    public CrewRoster? Crew { get; init; }
     public IReadOnlyList<TrackFile> AllTracks { get; init; } = Array.Empty<TrackFile>();
     public IReadOnlyList<TrackFile> FirmTracks { get; init; } = Array.Empty<TrackFile>();
     public IReadOnlyList<TrackFile> HostileTracks { get; init; } = Array.Empty<TrackFile>();

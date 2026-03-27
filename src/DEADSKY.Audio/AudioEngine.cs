@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
+using DEADSKY.Core.Logging;
 
 namespace DEADSKY.Audio;
 
@@ -111,28 +112,40 @@ public sealed class AudioEngine
 
     public void Play(SoundEvent sound)
     {
+        GameLogger.Info("AUDIO", $"Play requested: {sound} on thread {Environment.CurrentManagedThreadId}");
         LastPlayed = sound;
+        
         if (!IsInitialized)
+        {
+            GameLogger.Info("AUDIO", "AudioEngine not initialized, initializing now");
             Initialize();
+        }
 
         if (IsCoolingDown(sound))
+        {
+            GameLogger.Debug("AUDIO", $"{sound} is cooling down, skipping playback");
             return;
+        }
 
         string? assetPath = ResolveAssetPath(sound);
         LastAssetPath = assetPath;
 
         if (assetPath == null)
         {
-            Console.WriteLine($"[AUDIO] {sound} (no asset)");
+            GameLogger.Warning("AUDIO", $"{sound} has no asset path");
             return;
         }
 
+        GameLogger.Info("AUDIO", $"Playing {sound} from {Path.GetFileName(assetPath)}");
+
         if (Application.Current?.Dispatcher != null)
         {
+            GameLogger.Debug("AUDIO", $"Dispatching {sound} to UI thread for MediaPlayer playback");
             Application.Current.Dispatcher.BeginInvoke(() => PlayMedia(assetPath, sound));
             return;
         }
 
+        GameLogger.Debug("AUDIO", $"No dispatcher available, using Task.Run for {sound}");
         _ = Task.Run(() => PlayWave(assetPath, sound));
     }
 
@@ -176,12 +189,13 @@ public sealed class AudioEngine
     [SupportedOSPlatform("windows")]
     private void PlayMedia(string assetPath, SoundEvent sound)
     {
+        MediaPlayer? player = null;
         try
         {
             if (!OperatingSystem.IsWindows())
                 return;
 
-            var player = new MediaPlayer();
+            player = new MediaPlayer();
             player.Open(new Uri(assetPath, UriKind.Absolute));
             double volume = _volumes.TryGetValue(sound, out var configuredVolume)
                 ? configuredVolume
@@ -212,6 +226,20 @@ public sealed class AudioEngine
         catch (Exception ex)
         {
             Console.WriteLine($"[AUDIO] {sound} playback failed: {ex.Message}");
+            // Clean up player on exception to prevent resource leak
+            if (player != null)
+            {
+                lock (_playLock)
+                {
+                    _activePlayers.Remove(player);
+                }
+                try
+                {
+                    player.Stop();
+                    player.Close();
+                }
+                catch { /* Ignore disposal errors */ }
+            }
         }
     }
 

@@ -21,13 +21,19 @@
                 </Grid.RowDefinitions>
                 <Border Grid.Row="0" Style="{StaticResource PanelHeaderStyle}">
                     <DockPanel LastChildFill="False">
-                        <TextBlock Text="TACTICAL MAP // KOVRAN LOWLANDS" Style="{StaticResource HeaderText}"/>
+                        <TextBlock Text="{Binding TacticalMapTitleText}" Style="{StaticResource HeaderText}"/>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                             <TextBlock x:Name="MapZoomText"
                                        Text="MAP 180NM"
                                        Style="{StaticResource SmallText}"
                                        VerticalAlignment="Center"
                                        Margin="0,0,10,0"/>
+                            <CheckBox x:Name="FollowSelectedCheck"
+                                      Content="FOLLOW SEL"
+                                      Margin="0,0,8,0"
+                                      VerticalAlignment="Center"/>
+                            <Button Content="FOCUS TRACK" Style="{StaticResource MilButton}" Click="OnCenterSelected" Margin="0,0,6,0"/>
+                            <Button Content="FIT ACTION" Style="{StaticResource MilButton}" Click="OnFitAction" Margin="0,0,6,0"/>
                             <Button Content="-" Style="{StaticResource MilButton}" Click="OnZoomOut" />
                             <Button Content="RESET" Style="{StaticResource MilButton}" Click="OnResetZoom" Margin="6,0,0,0"/>
                             <Button Content="+" Style="{StaticResource MilButton}" Click="OnZoomIn" Margin="6,0,0,0"/>
@@ -40,7 +46,13 @@
                                              Margin="8"
                                              Snapshot="{Binding CurrentSnapshot}"
                                              FriendlyForces="{Binding VisibleFriendlyForces}"
+                                             OperationalPicture="{Binding OperationalPicture}"
                                              SelectedTrackId="{Binding SelectedTrackId}"
+                                             FollowSelectedTrack="{Binding IsChecked, ElementName=FollowSelectedCheck}"
+                                             ShowObjectiveMarkers="{Binding IsChecked, ElementName=ShowObjectivesCheck}"
+                                             ShowSupportMarkers="{Binding IsChecked, ElementName=ShowSupportCheck}"
+                                             ShowLandmarkMarkers="{Binding IsChecked, ElementName=ShowLandmarksCheck}"
+                                             ShowJammingMarkers="{Binding IsChecked, ElementName=ShowJammingCheck}"
                                              ShowLabels="{Binding ShowTacticalMapLabels}"/>
             </Grid>
         </Border>
@@ -58,7 +70,16 @@
                     <TextBlock Text="{Binding MissionName}" Style="{StaticResource PrimaryText}" Margin="0,6,0,0"/>
                     <TextBlock Text="{Binding ThreatSummaryText}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
                     <TextBlock Text="{Binding WeatherSummary}" Style="{StaticResource SmallText}" Margin="0,2,0,0"/>
-                    <TextBlock Text="Lore: Sable Ridge masks low flyers, Vanta River channels ingress lanes, and the Kovran Depot is the strike package objective." Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                    <WrapPanel Margin="0,8,0,0">
+                        <CheckBox x:Name="ShowObjectivesCheck" Content="OBJ" IsChecked="True" Margin="0,0,8,0"/>
+                        <CheckBox x:Name="ShowSupportCheck" Content="SUPPORT" IsChecked="True" Margin="0,0,8,0"/>
+                        <CheckBox x:Name="ShowLandmarksCheck" Content="LANDMARKS" IsChecked="True" Margin="0,0,8,0"/>
+                        <CheckBox x:Name="ShowJammingCheck" Content="ECM" IsChecked="True"/>
+                    </WrapPanel>
+                    <TextBlock Text="{Binding TacticalMapNotesText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                    <TextBlock Text="{Binding ObjectiveFocusText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                    <TextBlock Text="{Binding RecommendedActionSummaryText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                    <TextBlock x:Name="MapFocusText" Text="MAP FOCUS: SELECT A TRACK, OBJECTIVE, OR SUPPORT MARKER." Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                 </StackPanel>
             </Border>
 
@@ -70,13 +91,32 @@
                     <TextBlock Text="{Binding SelectedTrackThreatText}" Style="{StaticResource SmallText}" />
                     <TextBlock Text="{Binding SelectedTrackEnvelopeText}" Style="{StaticResource SmallText}" />
                     <TextBlock Text="{Binding SelectedTrackKinematicsText}" Style="{StaticResource AccentText}" Margin="0,4,0,0"/>
+                    <TextBlock Text="{Binding CommandTrustText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                    <TextBlock Text="{Binding CommsConsequenceText}" Style="{StaticResource WarningText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
                     <TextBlock Text="{Binding RadarCursorReadout}" Style="{StaticResource SmallText}" Margin="0,8,0,0"/>
                 </StackPanel>
             </Border>
 
             <Border Grid.Row="2" Style="{StaticResource MilPanel}" Padding="10">
                 <StackPanel>
-                    <TextBlock Text="TOP THREATS" Style="{StaticResource HeaderText}" />
+                    <TextBlock Text="OBJECTIVES / THREATS" Style="{StaticResource HeaderText}" />
+                    <ItemsControl ItemsSource="{Binding TacticalObjectives}" Margin="0,8,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,1,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="64"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Status}" Style="{StaticResource SmallText}" Foreground="{StaticResource CardAccentAmberBrush}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource SmallText}" Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding RangeNm, StringFormat={}{0:0}NM}" Style="{StaticResource SmallText}" Foreground="{StaticResource TextDimBrush}" HorizontalAlignment="Right"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="TOP THREATS" Style="{StaticResource HeaderText}" Margin="0,10,0,0"/>
                     <ItemsControl ItemsSource="{Binding ThreatBoardTracks}" Margin="0,8,0,0">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>

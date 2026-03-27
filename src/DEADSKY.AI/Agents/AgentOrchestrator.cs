@@ -3,6 +3,7 @@ using DEADSKY.AI.Tools;
 using DEADSKY.Core.Campaign;
 using DEADSKY.Core.Comms;
 using DEADSKY.Core.EnemyAI;
+using DEADSKY.Core.Logging;
 using DEADSKY.Core.Scenario;
 using DEADSKY.Core.Simulation;
 
@@ -50,9 +51,15 @@ public abstract class AgentBase
         int followUpMaxTokens = 80,
         CancellationToken ct = default)
     {
-        if (IsRunning) return "";
+        if (IsRunning)
+        {
+            GameLogger.Warning("AI", $"{AgentName} already running, skipping request");
+            return "";
+        }
+        
         IsRunning = true;
         LastRunTime = DateTime.UtcNow;
+        GameLogger.Info("AI", $"{AgentName} starting: {userContext.Substring(0, Math.Min(100, userContext.Length))}...");
 
         try
         {
@@ -60,7 +67,10 @@ public abstract class AgentBase
             var tools = (toolSubset ?? _tools.AllTools).ToList();
 
             if (resetHistory)
+            {
+                GameLogger.Debug("AI", $"{AgentName} resetting history");
                 _history.Clear();
+            }
 
             // Add user context to history
             _history.Add(ChatMessage.User(userContext));
@@ -68,14 +78,18 @@ public abstract class AgentBase
 
             string finalText = "";
             bool usedTools = false;
+            
+            GameLogger.Info("AI", $"{AgentName} calling AI model (maxTokens={planningMaxTokens})");
             var response = await _client.ChatAsync(systemPrompt, _history, tools, maxTokens: planningMaxTokens, ct: ct);
 
             if (!response.IsError)
             {
                 if (!response.HasToolCalls)
                 {
+                    GameLogger.Info("AI", $"{AgentName} received response without tool calls");
                     if (requireStructuredReply)
                     {
+                        GameLogger.Debug("AI", $"{AgentName} requesting structured reply");
                         finalText = await _client.GetStructuredReplyForMessagesAsync(
                             systemPrompt,
                             _history,
@@ -94,15 +108,20 @@ public abstract class AgentBase
                 else
                 {
                     usedTools = true;
+                    GameLogger.Info("AI", $"{AgentName} received {response.ToolCalls.Count} tool call(s)");
                     _history.Add(ChatMessage.AssistantToolCalls(response.ToolCalls, response.TextContent));
+                    
                     foreach (var toolCall in response.ToolCalls)
                     {
+                        GameLogger.Info("AI", $"{AgentName} executing tool: {toolCall.Name}");
                         var result = await _tools.ExecuteAsync(toolCall);
                         _history.Add(ChatMessage.ToolResult(toolCall.Id, CompactToolResult(result)));
+                        GameLogger.Debug("AI", $"{AgentName} tool {toolCall.Name} completed");
                     }
 
                     if (requireStructuredReply)
                     {
+                        GameLogger.Debug("AI", $"{AgentName} requesting structured reply after tools");
                         finalText = await _client.GetStructuredReplyForMessagesAsync(
                             systemPrompt,
                             _history,
@@ -112,9 +131,7 @@ public abstract class AgentBase
                     }
                     else if (finalReplyRequired)
                     {
-                        // LM Studio's recommended OpenAI-compatible flow is:
-                        // first call with tools, then feed tool results back without tools enabled
-                        // so the model returns a final assistant response instead of continuing tool loops.
+                        GameLogger.Debug("AI", $"{AgentName} requesting follow-up response");
                         var followUp = await _client.ChatAsync(
                             systemPrompt,
                             _history,
@@ -128,12 +145,26 @@ public abstract class AgentBase
                     if (!string.IsNullOrWhiteSpace(finalText))
                         _history.Add(ChatMessage.Assistant(finalText));
                 }
+                
+                GameLogger.Info("AI", $"{AgentName} completed successfully (usedTools={usedTools})");
+            }
+            else
+            {
+                GameLogger.Error("AI", $"{AgentName} received error response from AI model");
             }
 
             LastRunUsedTools = usedTools;
             return finalText;
         }
-        finally { IsRunning = false; }
+        catch (Exception ex)
+        {
+            GameLogger.Error("AI", $"{AgentName} failed", ex);
+            return "";
+        }
+        finally
+        {
+            IsRunning = false;
+        }
     }
 
     protected void TrimHistory()
@@ -210,12 +241,13 @@ public class EnemyCommanderAgent : AgentBase
                 BuildUserContext(snapshot),
                 _tools.EnemyCommanderTools,
                 finalReplyRequired: false,
-                planningMaxTokens: 96);
+                planningMaxTokens: 512);
         }
     }
 
     protected override string BuildSystemPrompt(SimulationSnapshot snapshot)
     {
+        var envelope = _tools.GetKnowledgeEnvelope(AgentKnowledgeRole.EnemyCommander);
         return $@"You are the enemy air force commander. Your job is to control your aircraft tactically using tools.
 
 {_profile.BuildSystemPromptContext()}
@@ -225,13 +257,15 @@ TACTICAL RULES:
 - If you're losing heavily (>40% losses), consider aborting or requesting reinforcements.
 - Use ECM escorts to protect strike packages when available.
 - Coordinate groups to attack from multiple axes simultaneously.
-- If aircraft are being shot at, tell them to evade or change flight path.
+- If aircraft are being shot at, shift package doctrine and timing rather than micromanaging individual headings.
 - Respect doctrine rules. Use only tactics, behaviors, and radio traffic that fit the package role and current morale state.
 - You can ONLY affect the simulation by calling tools.
 - Do not emit long analysis or internal reasoning as plain text; call the needed tools directly.
 - Stay at commander level. Choose package tactic, timing, reinforcement, support requests, and radio intent.
 - Do not try to hand-fly aircraft, set per-aircraft headings, or micromanage ECM state.
 - Do not make up aircraft that don't exist in the contact list.
+- Knowledge discipline: {envelope.Summary}
+- Do not assume access to the player's fused picture, support network, or true battery state unless a tool gives you an observed clue.
 
 {DoctrineRules.BuildAiGuidance(_scenarioAccessor?.Invoke(), snapshot, _profile)}
 
@@ -239,7 +273,7 @@ TACTICAL RULES:
 
 {RadioRules.BuildGuidanceSummary()}
 
-Available tool actions: set_group_tactic, spawn_aircraft (if scenario allows), send_radio_message, broadcast_open_frequency, get_support_status, request_reinforcement, request_support_action, cancel_support_action, log_event.";
+Available tool actions: get_enemy_operational_brief, get_radar_contacts, get_contact_details, get_threat_assessment, set_group_tactic, spawn_aircraft (if scenario allows), send_radio_message, broadcast_open_frequency, request_reinforcement, and log_event.";
     }
 
     private string BuildUserContext(SimulationSnapshot snapshot)
@@ -252,8 +286,8 @@ Your aircraft in area: {hostile}
 Enemy kills against your forces this mission: {kills}
 Current threat tracks visible to enemy: {snapshot.HostileTracks.Count}
 
-Assess the tactical situation and use tools to direct your forces. 
-Consider: Should you change tactics? Adjust flight paths? Activate ECM? 
+        Assess the tactical situation from your observed picture and direct your forces with commander-level decisions.
+Consider: Should you change package tactics, timing, reinforcement, or radio deception?
 Call tools to execute your decisions.";
     }
 }
@@ -290,26 +324,51 @@ public class AlliedHQAgent : AgentBase
     /// <summary>Called when player sends a message on Command Net</summary>
     public async Task RespondToPlayerMessage(string playerMessage, SimulationSnapshot snapshot)
     {
-        var response = await RunAsync(
-            snapshot,
-            $"Player transmission: \"{playerMessage}\". Respond as ECHO ACTUAL with one short radio transmission grounded in the live picture. Use tools first if needed.",
-            toolSubset: GetDirectReplyTools(),
-            finalReplyRequired: true,
-            resetHistory: true,
-            planningMaxTokens: 72,
-            followUpMaxTokens: 56);
-        response = NormalizeRadioReply(response, maxWords: 18);
-        if (string.IsNullOrWhiteSpace(response))
-            return;
+        try
+        {
+            var response = await RunAsync(
+                snapshot,
+                $"Player transmission: \"{playerMessage}\". Respond as ECHO ACTUAL with one short radio transmission grounded in the live picture. Use tools first if needed.",
+                toolSubset: GetDirectReplyTools(),
+                requireStructuredReply: true,
+                replyTemperature: 0.25,
+                replyMaxTokens: 512,
+                finalReplyRequired: true,
+                resetHistory: true,
+                planningMaxTokens: 512);
+            
+            if (string.IsNullOrWhiteSpace(response))
+            {
+                GameLogger.Error("AI", "AlliedHQ response was empty - structured output failed");
+                return;
+            }
 
-        _tools.Simulation.Comms.Queue(CommManager.CreateAlliedHQMessage(
-            response,
-            MessagePriority.Priority));
+            _tools.Simulation.Comms.Queue(CommManager.CreateAlliedHQMessage(
+                response.Trim(),
+                MessagePriority.Priority));
+        }
+        catch (Exception ex)
+        {
+            GameLogger.Error("AI", $"AlliedHQ.RespondToPlayerMessage failed: {ex.Message}", ex);
+        }
     }
 
     protected override string BuildSystemPrompt(SimulationSnapshot snapshot)
     {
+        var envelope = _tools.GetKnowledgeEnvelope(AgentKnowledgeRole.AlliedHQ);
         var battery = snapshot.Battery;
+        string crewState = snapshot.Crew != null 
+            ? snapshot.Crew.BuildConditionSummary()
+            : "CREW STATE UNKNOWN";
+        double avgMorale = snapshot.Crew?.Soldiers.Average(s => s.Morale) ?? 0.75;
+        double avgFear = snapshot.Crew?.Soldiers.Average(s => s.Fear) ?? 0.1;
+        
+        string toneGuidance = avgMorale < 0.4 
+            ? "Crew morale is LOW - be encouraging, acknowledge their stress, boost confidence."
+            : avgFear > 0.6
+                ? "Crew fear is HIGH - be calm, reassuring, project confidence and control."
+                : "Crew is holding steady - maintain professional military tone.";
+        
         return $@"You are ECHO ACTUAL, the Sector Air Defense Commander for the Allied Kovran Defense Force.
 You command Battery ALPHA (the player) and coordinate the air defense network in Sector 7.
 
@@ -317,6 +376,7 @@ PERSONALITY:
 - Professional military officer. Calm under pressure, urgent when needed.
 - Use proper radio procedure and NATO brevity codes naturally.
 - Give orders when the situation demands. React to engagement results.
+- {toneGuidance}
 
 CHAIN OF COMMAND:
 CASTLE (National Command) → You (ECHO, Sector Commander) → ALPHA (Player Battery)
@@ -329,12 +389,15 @@ ROE: {battery?.ROE}
 Hostile Tracks: {snapshot.HostileTracks.Count}
 Friendly Missiles in Flight: {snapshot.ActiveMissiles.Count}
 Battery Kills: {battery?.ConfirmedKills} | Missiles Fired: {battery?.MissilesFired}
+{crewState}
 
 When the player sends you a message — respond in character. Keep it tight and military.
 Use brevity codes: BOGEY (unknown), BANDIT (hostile), SPLASH (kill), BRAA (bearing/range/alt/aspect).
 Issue orders when appropriate. Escalate ROE when warranted.
+Adjust your tone based on crew morale and fear levels - acknowledge their state when appropriate.
 
 Friendly support actors available: {(_friendlySupport == null ? "no support board loaded" : _friendlySupport.BuildStatusBoard())}
+Knowledge discipline: {envelope.Summary}
 
 Use tools to gather data, update ROE, set alert levels, request support actions, and log events.
 If a separate final reply is requested, do not call send_radio_message; that transmission will be handled automatically.";
@@ -358,13 +421,11 @@ Rules:
 
     private IReadOnlyList<ToolDefinition> GetSitrepTools() => _tools.GetToolsByName(
     [
-        "get_radar_contacts",
-        "get_contact_details",
-        "get_threat_assessment",
         "get_shared_operational_picture",
         "get_recent_incidents",
         "get_support_status",
         "get_battery_status",
+        "get_threat_assessment",
         "get_engagement_history"
     ]);
 
@@ -385,9 +446,8 @@ Rules:
             toolSubset: GetSitrepTools(),
             requireStructuredReply: true,
             replyTemperature: 0.2,
-            replyMaxTokens: 72,
-            planningMaxTokens: 64);
-        response = NormalizeRadioReply(response, maxWords: 24);
+            replyMaxTokens: 512,
+            planningMaxTokens: 512);
         if (!string.IsNullOrWhiteSpace(response))
         {
             _tools.Simulation.Comms.Queue(CommManager.CreateAlliedHQMessage(
@@ -433,49 +493,68 @@ public class IntelligenceAgent : AgentBase
             toolSubset: GetIntelAssessmentTools(),
             requireStructuredReply: true,
             replyTemperature: 0.2,
-            replyMaxTokens: 64,
-            planningMaxTokens: 56);
-        response = NormalizeRadioReply(response, maxWords: 22);
+            replyMaxTokens: 512,
+            planningMaxTokens: 512);
         if (!string.IsNullOrWhiteSpace(response))
             _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response.Trim()));
     }
 
     public async Task RespondToPlayerQuery(string playerMessage, SimulationSnapshot snapshot)
     {
-        var response = await RunAsync(
-            snapshot,
-            $"Player transmission: \"{playerMessage}\". Respond as INTEL-1 with one concise assessment or warning grounded in the live tracks. Use tools first if needed.",
-            toolSubset: GetDirectIntelTools(),
-            finalReplyRequired: true,
-            resetHistory: true,
-            planningMaxTokens: 72,
-            followUpMaxTokens: 56);
-        response = NormalizeRadioReply(response, maxWords: 20);
-        if (string.IsNullOrWhiteSpace(response))
-            return;
+        try
+        {
+            var response = await RunAsync(
+                snapshot,
+                $"Player transmission: \"{playerMessage}\". Respond as INTEL-1 with one concise assessment or warning grounded in the live tracks. Use tools first if needed.",
+                toolSubset: GetDirectIntelTools(),
+                requireStructuredReply: true,
+                replyTemperature: 0.25,
+                replyMaxTokens: 512,
+                finalReplyRequired: true,
+                resetHistory: true,
+                planningMaxTokens: 512);
+            
+            if (string.IsNullOrWhiteSpace(response))
+            {
+                GameLogger.Error("AI", "Intel response was empty - structured output failed");
+                return;
+            }
 
-        _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response));
+            _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response.Trim()));
+        }
+        catch (Exception ex)
+        {
+            GameLogger.Error("AI", $"Intel.RespondToPlayerQuery failed: {ex.Message}", ex);
+        }
     }
 
-    protected override string BuildSystemPrompt(SimulationSnapshot snapshot) =>
-        $@"You are INTEL-1, the intelligence officer attached to Battery ALPHA.
+    protected override string BuildSystemPrompt(SimulationSnapshot snapshot)
+    {
+        string crewState = snapshot.Crew != null 
+            ? snapshot.Crew.BuildConditionSummary()
+            : "CREW STATE UNKNOWN";
+        double avgMorale = snapshot.Crew?.Soldiers.Average(s => s.Morale) ?? 0.75;
+        
+        string toneGuidance = avgMorale < 0.4 
+            ? "Crew morale is low - keep assessments clear and actionable, avoid overwhelming them with details."
+            : "Crew is holding - provide precise tactical intelligence.";
+        
+        return $@"You are INTEL-1, the intelligence officer attached to Battery ALPHA.
 You analyze radar data and provide tactical intelligence assessments.
 
 Your tone: analytical, precise. Use hedged language ('probable', 'assess', 'indicate').
 Keep messages brief and actionable.
+{toneGuidance}
+
+{crewState}
+
+Knowledge discipline: {_tools.GetKnowledgeEnvelope(AgentKnowledgeRole.Intelligence).Summary}
 
 Use tools to gather contact and threat data before reporting.
 If a separate final reply is requested, do not call send_radio_message; that transmission will be handled automatically.";
+    }
 
-    private IReadOnlyList<ToolDefinition> GetIntelAssessmentTools() => _tools.GetToolsByName(
-    [
-        "get_radar_contacts",
-        "get_contact_details",
-        "get_threat_assessment",
-        "get_shared_operational_picture",
-        "get_recent_incidents",
-        "get_engagement_history"
-    ]);
+    private IReadOnlyList<ToolDefinition> GetIntelAssessmentTools() => _tools.IntelligenceTools;
 
     private IReadOnlyList<ToolDefinition> GetDirectIntelTools() => _tools.GetToolsByName(
     [
@@ -504,9 +583,8 @@ Rules:
             toolSubset: GetIntelAssessmentTools(),
             requireStructuredReply: true,
             replyTemperature: 0.2,
-            replyMaxTokens: 72,
-            planningMaxTokens: 64);
-        response = NormalizeRadioReply(response, maxWords: 24);
+            replyMaxTokens: 512,
+            planningMaxTokens: 512);
         if (!string.IsNullOrWhiteSpace(response))
             _tools.Simulation.Comms.Queue(CommManager.CreateIntelMessage(response.Trim()));
     }
@@ -530,15 +608,37 @@ public class CrewPersonalityAgent : AgentBase
         string soldierName, string personality, string situation,
         SimulationSnapshot snapshot, CancellationToken ct = default)
     {
-        string prompt = $"Soldier: {soldierName}\nPersonality: {personality}\nSituation: {situation}\n\nWrite ONE radio line (1-2 sentences max). Stay in character. No quotes around it.";
-        var response = await _client.GetTextAsync(BuildSystemPrompt(snapshot), prompt, temperature: 0.7, maxTokens: 40, ct: ct);
-        return NormalizeRadioReply(response, maxWords: 16);
+        var soldier = snapshot.Crew?.Soldiers.FirstOrDefault(s => s.FullName == soldierName);
+        string emotionalState = soldier != null 
+            ? $"Morale: {soldier.Morale:P0}, Fear: {soldier.Fear:P0}, Health: {soldier.Health}"
+            : "Unknown state";
+        
+        string prompt = $"Soldier: {soldierName}\nPersonality: {personality}\nEmotional State: {emotionalState}\nSituation: {situation}\n\nWrite ONE radio line (1-2 sentences max). Stay in character. Reflect their current morale and fear level naturally. No quotes around it.";
+        var response = await _client.GetTextAsync(BuildSystemPrompt(snapshot), prompt, temperature: 0.7, maxTokens: 128, ct: ct);
+        return response.Trim();
     }
 
-    protected override string BuildSystemPrompt(SimulationSnapshot snapshot) =>
-        "You write realistic military radio lines for SAM battery crew members. " +
-        "Each personality type has a distinct voice. Be brief. Use radio procedure. Keep each line under 16 words. " +
-        "Never add quotes or speaker attribution — just the spoken words.";
+    protected override string BuildSystemPrompt(SimulationSnapshot snapshot)
+    {
+        string crewState = snapshot.Crew != null 
+            ? $"Current crew state: {snapshot.Crew.BuildConditionSummary()}"
+            : "Crew state unknown";
+        
+        return $@"You write realistic military radio lines for SAM battery crew members.
+Each personality type has a distinct voice. Ground replies in the local battery picture, current control state, and recent consequences only.
+
+{crewState}
+
+EMOTIONAL DYNAMICS:
+- High morale (>70%): Confident, sharp, professional. May show pride after kills.
+- Medium morale (40-70%): Professional but strained. Clipped responses.
+- Low morale (<40%): Tense, frustrated. May curse, show doubt, or question orders.
+- High fear (>60%): Shaky, urgent, may stutter or repeat words.
+- Wounded/Shaken: Pain, exhaustion, slower responses.
+
+Be brief. Use radio procedure. Reflect their emotional state naturally through word choice and tone.
+Never add quotes or speaker attribution — just the spoken words.";
+    }
 }
 
 // ── Agent Orchestrator ─────────────────────────────────────────────────────
@@ -591,17 +691,37 @@ public class AgentOrchestrator
 
     public async Task HandlePlayerMessageAsync(RadioChannel channel, string message, SimulationSnapshot snapshot)
     {
-        if (!_aiAvailable) return;
+        if (!_aiAvailable)
+        {
+            GameLogger.Warning("AI", "HandlePlayerMessageAsync called but AI unavailable");
+            return;
+        }
+
+        GameLogger.Info("AI", $"HandlePlayerMessageAsync: channel={channel}, message={message.Substring(0, Math.Min(50, message.Length))}...");
         PauseBackgroundAgents();
 
-        switch (channel)
+        try
         {
-            case RadioChannel.CommandNet:
-                await AlliedHQ.RespondToPlayerMessage(message, snapshot);
-                break;
-            case RadioChannel.IntelNet:
-                await Intel.RespondToPlayerQuery(message, snapshot);
-                break;
+            switch (channel)
+            {
+                case RadioChannel.CommandNet:
+                    GameLogger.Debug("AI", "Routing to AlliedHQ.RespondToPlayerMessage");
+                    await AlliedHQ.RespondToPlayerMessage(message, snapshot);
+                    break;
+                case RadioChannel.IntelNet:
+                    GameLogger.Debug("AI", "Routing to Intel.RespondToPlayerQuery");
+                    await Intel.RespondToPlayerQuery(message, snapshot);
+                    break;
+                default:
+                    GameLogger.Warning("AI", $"Unhandled radio channel: {channel}");
+                    break;
+            }
+            GameLogger.Info("AI", $"HandlePlayerMessageAsync completed for {channel}");
+        }
+        catch (Exception ex)
+        {
+            GameLogger.Error("AI", $"HandlePlayerMessageAsync failed for {channel}", ex);
+            throw; // Re-throw to let caller handle
         }
 
         PauseBackgroundAgents();
@@ -609,11 +729,29 @@ public class AgentOrchestrator
 
     public async Task HandleNewContactAsync(string trackId, SimulationSnapshot snapshot)
     {
-        if (!_aiAvailable) return;
-        if (_client.IsBusy || DateTime.UtcNow < _backgroundCooldownUntilUtc || Intel.IsRunning)
+        if (!_aiAvailable)
+        {
+            GameLogger.Debug("AI", $"HandleNewContactAsync skipped for {trackId} - AI unavailable");
             return;
+        }
 
-        await Intel.OnNewContactDetected(trackId, snapshot);
+        if (_client.IsBusy || DateTime.UtcNow < _backgroundCooldownUntilUtc || Intel.IsRunning)
+        {
+            GameLogger.Debug("AI", $"HandleNewContactAsync skipped for {trackId} - AI busy or cooldown active");
+            return;
+        }
+
+        try
+        {
+            GameLogger.Info("AI", $"HandleNewContactAsync: trackId={trackId}");
+            await Intel.OnNewContactDetected(trackId, snapshot);
+            GameLogger.Info("AI", $"HandleNewContactAsync completed for {trackId}");
+        }
+        catch (Exception ex)
+        {
+            GameLogger.Error("AI", $"HandleNewContactAsync failed for {trackId}", ex);
+            // Don't re-throw - this is a background operation
+        }
     }
 
     /// <summary>Ping model and mark unavailable if not responding</summary>

@@ -15,6 +15,7 @@ public partial class TacticalMapWindow : Window
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         MapDisplay.TrackClicked += OnTrackClicked;
+        MapDisplay.MarkerClicked += OnMarkerClicked;
         MapDisplay.MapZoomChanged += OnMapZoomChanged;
         UpdateMapZoomReadout(MapDisplay.MapRangeNm);
     }
@@ -22,6 +23,7 @@ public partial class TacticalMapWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         MapDisplay.TrackClicked -= OnTrackClicked;
+        MapDisplay.MarkerClicked -= OnMarkerClicked;
         MapDisplay.MapZoomChanged -= OnMapZoomChanged;
     }
 
@@ -29,6 +31,14 @@ public partial class TacticalMapWindow : Window
     {
         if (DataContext is MainViewModel vm)
             vm.SelectTrack(trackId);
+
+        MapFocusText.Text = $"MAP FOCUS: TRACK {trackId}.";
+    }
+
+    private void OnMarkerClicked(DEADSKY.Core.Simulation.TacticalMarkerState marker)
+    {
+        MapDisplay.CenterOnMarker(marker);
+        MapFocusText.Text = $"MAP FOCUS: {marker.Label.ToUpperInvariant()} // {marker.Details.ToUpperInvariant()}";
     }
 
     private void OnMapZoomChanged(double rangeNm) => UpdateMapZoomReadout(rangeNm);
@@ -43,4 +53,8 @@ public partial class TacticalMapWindow : Window
     private void OnZoomOut(object sender, RoutedEventArgs e) => MapDisplay.ZoomOut();
 
     private void OnResetZoom(object sender, RoutedEventArgs e) => MapDisplay.ResetZoom();
+
+    private void OnCenterSelected(object sender, RoutedEventArgs e) => MapDisplay.CenterOnSelectedTrack();
+
+    private void OnFitAction(object sender, RoutedEventArgs e) => MapDisplay.FitToAction();
 }

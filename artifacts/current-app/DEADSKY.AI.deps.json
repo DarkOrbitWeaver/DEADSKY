@@ -1,0 +1,39 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v9.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v9.0": {
+      "DEADSKY.AI/1.0.0": {
+        "dependencies": {
+          "DEADSKY.Core": "1.0.0"
+        },
+        "runtime": {
+          "DEADSKY.AI.dll": {}
+        }
+      },
+      "DEADSKY.Core/1.0.0": {
+        "runtime": {
+          "DEADSKY.Core.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "DEADSKY.AI/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "DEADSKY.Core/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

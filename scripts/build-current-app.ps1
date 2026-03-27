@@ -15,10 +15,14 @@ if (-not $resolvedOutputDir.StartsWith($resolvedRepoRoot, [System.StringComparis
     throw "Refusing to clean output outside repo root: $resolvedOutputDir"
 }
 
+# Kill any running instances
 Get-CimInstance Win32_Process -Filter "Name='DEADSKY.App.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Equals($targetExe, [System.StringComparison]::OrdinalIgnoreCase) } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
+Start-Sleep -Milliseconds 500
+
+# Clean output directory
 try {
     Get-ChildItem -LiteralPath $resolvedOutputDir -Force -ErrorAction SilentlyContinue |
         Remove-Item -Recurse -Force -ErrorAction Stop
@@ -33,4 +37,5 @@ catch {
         }
 }
 
+# Build
 dotnet build $projectPath -c $Configuration "-p:OutDir=$resolvedOutputDir\"

@@ -64,6 +64,11 @@ public class Aircraft : Entity
     public string? GroupId { get; set; }
     public string? FormationLeaderId { get; set; }
     public int FormationSlot { get; set; }         // 0=lead, 1-3=wingmen
+    public string? PackageRoleLabel { get; set; }
+    public string? MissionObjectiveId { get; set; }
+    public string? MissionObjectiveName { get; set; }
+    public string? EntryLabel { get; set; }
+    public Vec2? ObjectivePosition { get; set; }
 
     // ── Threat awareness (what the aircraft "knows") ──────────────────
     public bool RadarLockDetected { get; set; }    // RWR is screaming
@@ -307,7 +312,7 @@ public class Aircraft : Entity
 
     private void ExecutePopUp(double deltaTime)
     {
-        double rangeM = Position.Length;
+        double rangeM = Position.DistanceTo(ResolveMissionAnchor());
         double popUpRangeM = CoordinateSystem.NmToMeters(15);
 
         if (rangeM > popUpRangeM)
@@ -335,13 +340,14 @@ public class Aircraft : Entity
 
     private void ExecuteEcmStandoff()
     {
-        double rangeNm = CoordinateSystem.MetersToNm(Position.Length);
+        Vec2 missionAnchor = ResolveMissionAnchor();
+        double rangeNm = CoordinateSystem.MetersToNm(Position.DistanceTo(missionAnchor));
         RequestedAltitudeM = CoordinateSystem.FtToM(28000);
         RequestedSpeedMps = FlightModel.MaxSpeedMps * 0.78;
 
         if (rangeNm > 46)
         {
-            RequestedHeadingDeg = Position.HeadingTo(Vec2.Zero);
+            RequestedHeadingDeg = Position.HeadingTo(missionAnchor);
             return;
         }
 
@@ -350,13 +356,14 @@ public class Aircraft : Entity
 
     private void ExecuteEscortCover()
     {
-        double rangeNm = CoordinateSystem.MetersToNm(Position.Length);
+        Vec2 missionAnchor = ResolveMissionAnchor();
+        double rangeNm = CoordinateSystem.MetersToNm(Position.DistanceTo(missionAnchor));
         RequestedAltitudeM = CoordinateSystem.FtToM(26000);
         RequestedSpeedMps = FlightModel.MaxSpeedMps * 0.94;
 
         if (rangeNm > 24)
         {
-            RequestedHeadingDeg = Position.HeadingTo(Vec2.Zero);
+            RequestedHeadingDeg = Position.HeadingTo(missionAnchor);
             return;
         }
 
@@ -365,7 +372,8 @@ public class Aircraft : Entity
 
     private void ExecuteSead()
     {
-        double rangeNm = CoordinateSystem.MetersToNm(Position.Length);
+        Vec2 missionAnchor = ResolveMissionAnchor();
+        double rangeNm = CoordinateSystem.MetersToNm(Position.DistanceTo(missionAnchor));
         RequestedAltitudeM = CoordinateSystem.FtToM(rangeNm > 22 ? 22000 : 18000);
         RequestedSpeedMps = FlightModel.MaxSpeedMps * 0.88;
 
@@ -376,7 +384,7 @@ public class Aircraft : Entity
             return;
         }
 
-        RequestedHeadingDeg = Position.HeadingTo(Vec2.Zero);
+        RequestedHeadingDeg = Position.HeadingTo(missionAnchor);
     }
 
     private void DeployChaff()
@@ -418,6 +426,8 @@ public class Aircraft : Entity
         AircraftBehavior.EscortCover or
         AircraftBehavior.SEAD or
         AircraftBehavior.TerrainFollowing;
+
+    private Vec2 ResolveMissionAnchor() => ObjectivePosition ?? TargetWaypoint ?? Vec2.Zero;
 
     private static double NormalizeHeading(double headingDeg) => (headingDeg % 360 + 360) % 360;
 

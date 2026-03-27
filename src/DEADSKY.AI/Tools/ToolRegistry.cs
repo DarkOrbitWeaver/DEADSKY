@@ -28,23 +28,9 @@ public class ToolRegistry
     public SimulationEngine Simulation => _sim;
     public IReadOnlyList<ToolDefinition> AllTools =>
         _definitions.Values.ToList();
-    public IReadOnlyList<ToolDefinition> EnemyCommanderTools => GetToolsByName(
-    [
-        "get_radar_contacts",
-        "get_contact_details",
-        "get_threat_assessment",
-        "get_shared_operational_picture",
-        "get_recent_incidents",
-        "get_support_status",
-        "send_radio_message",
-        "broadcast_open_frequency",
-        "set_group_tactic",
-        "spawn_aircraft",
-        "request_reinforcement",
-        "request_support_action",
-        "cancel_support_action",
-        "log_event"
-    ]);
+    public IReadOnlyList<ToolDefinition> EnemyCommanderTools => GetToolsForRole(AgentKnowledgeRole.EnemyCommander);
+    public IReadOnlyList<ToolDefinition> AlliedHQTools => GetToolsForRole(AgentKnowledgeRole.AlliedHQ);
+    public IReadOnlyList<ToolDefinition> IntelligenceTools => GetToolsForRole(AgentKnowledgeRole.Intelligence);
 
     public ToolRegistry(
         SimulationEngine sim,
@@ -82,6 +68,12 @@ public class ToolRegistry
             .ToList();
     }
 
+    public IReadOnlyList<ToolDefinition> GetToolsForRole(AgentKnowledgeRole role) =>
+        GetToolsByName(ToolAccessPolicy.ResolveToolNames(role));
+
+    public KnowledgeEnvelope GetKnowledgeEnvelope(AgentKnowledgeRole role) =>
+        ToolAccessPolicy.BuildEnvelope(role);
+
     // ── Registration ──────────────────────────────────────────────────
 
     private void RegisterAll()
@@ -113,6 +105,12 @@ public class ToolRegistry
             "Get the fused operator picture used by UI and AI: threats, support, and recent consequences.",
             Array.Empty<(string, string)>(), Array.Empty<string>(),
             GetSharedOperationalPicture);
+
+        Register("get_enemy_operational_brief",
+            "Get a role-correct enemy commander brief built from own-force status, observed SAM pressure, and inferred battlefield clues.",
+            Array.Empty<(string, string)>(),
+            Array.Empty<string>(),
+            GetEnemyOperationalBrief);
 
         Register("get_recent_incidents",
             "Recent engagement incidents, warnings, and consequence records.",
@@ -462,16 +460,76 @@ public class ToolRegistry
     {
         var picture = OperationalPictureBuilder.Build(
             _sim.LatestSnapshot,
+            _scenarioAccessor?.Invoke(),
             _sim.Weapons.Incidents,
-            _friendlySupport?.Packages);
+            _friendlySupport?.Packages,
+            _sim.Radar.TrackManager.GetDesignatedTrack()?.TrackId,
+            _friendlySupport?.CommandConfidence ?? 1.0,
+            _friendlySupport?.CommandPostureSummary ?? "COMMAND POSTURE: STEADY.",
+            _friendlySupport?.LiveConsequenceSummary ?? "SUPPORT CONSEQUENCE: NO LIVE COMMAND STRAIN.");
 
         return Task.FromResult(JsonSerializer.Serialize(new
         {
+            scenario_header = picture.ScenarioHeader,
+            scenario_notes = picture.ScenarioNotes,
             threat_summary = picture.ThreatSummary,
             support_summary = picture.SupportSummary,
             consequence_summary = picture.ConsequenceSummary,
+            recommended_action = picture.RecommendedActionSummary,
             threats = picture.ThreatStates,
-            friendlies = picture.FriendlyForces
+            friendlies = picture.FriendlyForces,
+            objectives = picture.ObjectiveStates,
+            markers = picture.TacticalMarkers,
+            selected_track = picture.SelectedTrack,
+            comms = picture.CommsConsequences
+        }));
+    }
+
+    private Task<string> GetEnemyOperationalBrief(ToolCall call)
+    {
+        var hostiles = _sim.Entities.GetHostileAircraft().OfType<Aircraft>().ToList();
+        int missileThreats = hostiles.Count(aircraft => aircraft.MissileInbound);
+        int locked = hostiles.Count(aircraft => aircraft.HardLockDetected);
+        int radarPainted = hostiles.Count(aircraft => aircraft.RadarLockDetected);
+        int losses = hostiles.Count(aircraft => aircraft.Status == EntityStatus.Destroyed);
+        var activeGroups = hostiles
+            .Where(aircraft => aircraft.Status != EntityStatus.Destroyed)
+            .GroupBy(aircraft => string.IsNullOrWhiteSpace(aircraft.GroupId) ? "UNATTRIBUTED" : aircraft.GroupId)
+            .Select(group => new
+            {
+                group_id = group.Key,
+                count = group.Count(),
+                lead_behavior = group.OrderBy(aircraft => aircraft.Position.Length).First().CurrentBehavior.ToString(),
+                nearest_range_nm = Math.Round(group.Min(aircraft => CoordinateSystem.MetersToNm(aircraft.Position.Length)), 1)
+            })
+            .OrderBy(entry => entry.nearest_range_nm)
+            .ToList();
+
+        string samPressure = missileThreats > 0
+            ? "Active missile threat detected."
+            : locked > 0
+                ? "Hard-lock pressure on one or more aircraft."
+                : radarPainted > 0
+                    ? "Enemy radar search or hold detected."
+                    : "No direct SAM pressure observed right now.";
+
+        return Task.FromResult(JsonSerializer.Serialize(new
+        {
+            own_force_summary = new
+            {
+                airborne = hostiles.Count(aircraft => aircraft.Status != EntityStatus.Destroyed),
+                losses,
+                missile_threats = missileThreats,
+                hard_locks = locked,
+                radar_paints = radarPainted,
+                sam_pressure = samPressure
+            },
+            active_groups = activeGroups,
+            observations = new
+            {
+                visible_hostile_tracks_to_player = _sim.LatestSnapshot.HostileTracks.Count,
+                active_friendly_missiles = _sim.LatestSnapshot.ActiveMissiles.Count
+            }
         }));
     }
 

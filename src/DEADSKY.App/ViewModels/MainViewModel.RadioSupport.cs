@@ -76,6 +76,9 @@ public partial class MainViewModel
         _ => "Open frequency is uncontrolled. Hostile, civilian, or nobody may answer depending on the situation."
     };
     public string SupportStatusBoard => FriendlySupport.BuildStatusBoard();
+    public string SupportRecommendationText => BuildSupportRecommendationText();
+    public string RecommendedSupportCommandKey => BuildRecommendedSupportCommandKey();
+    public string RecommendedSupportActionText => BuildRecommendedSupportActionText();
     public string SupportActivitySummaryText
     {
         get
@@ -224,6 +227,7 @@ public partial class MainViewModel
 
     internal void RefreshSupportDisplay()
     {
+        SendQuickCommandCommand.NotifyCanExecuteChanged();
         for (int i = 0; i < FriendlySupport.Packages.Count; i++)
         {
             var package = FriendlySupport.Packages[i];
@@ -243,6 +247,16 @@ public partial class MainViewModel
         OnPropertyChanged(nameof(SupportConsequenceText));
         OnPropertyChanged(nameof(ScenarioContractStatusText));
         OnPropertyChanged(nameof(RadioRulesSummaryText));
+        OnPropertyChanged(nameof(OperationalPicture));
+        OnPropertyChanged(nameof(VisibleFriendlyForces));
+        OnPropertyChanged(nameof(TacticalObjectives));
+        OnPropertyChanged(nameof(ObjectiveFocusText));
+        OnPropertyChanged(nameof(RecommendedActionSummaryText));
+        OnPropertyChanged(nameof(CommandTrustText));
+        OnPropertyChanged(nameof(CommsConsequenceText));
+        OnPropertyChanged(nameof(SupportRecommendationText));
+        OnPropertyChanged(nameof(RecommendedSupportCommandKey));
+        OnPropertyChanged(nameof(RecommendedSupportActionText));
     }
 
     internal void RefreshSupportNetworkReports(SimulationSnapshot snapshot)
@@ -407,22 +421,28 @@ public partial class MainViewModel
 
     private void ApplyPictureRefresh()
     {
-        foreach (var track in Sim.LatestSnapshot.AllTracks
+        foreach (var trackId in Sim.LatestSnapshot.AllTracks
                      .Where(track => track.Classification is TrackClassification.Hostile or TrackClassification.AssumedHostile or TrackClassification.Unknown)
                      .OrderByDescending(track => track.ThreatLevel)
-                     .Take(4))
+                     .Take(4)
+                     .Select(track => track.TrackId))
         {
-            track.PositionUncertaintyM = Math.Max(75, track.PositionUncertaintyM * 0.72);
-            if (track.Quality != TrackQuality.Lost)
-                track.Quality = TrackQuality.Firm;
-            if (track.Classification != TrackClassification.Unknown)
-                track.ClassificationConfidence = Math.Max(track.ClassificationConfidence, 0.78);
+            var liveTrack = Sim.Radar.TrackManager.GetById(trackId);
+            if (liveTrack == null)
+                continue;
+
+            liveTrack.PositionUncertaintyM = Math.Max(75, liveTrack.PositionUncertaintyM * 0.72);
+            if (liveTrack.Quality != TrackQuality.Lost)
+                liveTrack.Quality = TrackQuality.Firm;
+            if (liveTrack.Classification != TrackClassification.Unknown)
+                liveTrack.ClassificationConfidence = Math.Max(liveTrack.ClassificationConfidence, 0.78);
+            liveTrack.UpdateThreatAssessment();
         }
     }
 
     private void ApplyDefensivePressure()
     {
-        foreach (var aircraft in Sim.LatestSnapshot.HostileAircraft
+        foreach (var aircraft in Sim.Entities.GetHostileAircraft().OfType<Aircraft>()
                      .OrderBy(aircraft => aircraft.Position.Length)
                      .Take(2))
         {
@@ -435,15 +455,22 @@ public partial class MainViewModel
 
     private void ApplyJammingAssist()
     {
-        foreach (var aircraft in Sim.LatestSnapshot.HostileAircraft.Take(2))
+        foreach (var aircraft in Sim.Entities.GetHostileAircraft().OfType<Aircraft>().Take(2))
         {
             aircraft.AggressivenessLevel = Math.Max(0.25, aircraft.AggressivenessLevel - 0.1);
             if (aircraft.CurrentBehavior == AircraftBehavior.IngressAttack)
                 aircraft.CurrentBehavior = AircraftBehavior.EvasiveManeuver;
         }
 
-        foreach (var track in Sim.LatestSnapshot.HostileTracks.Take(3))
-            track.PositionUncertaintyM = Math.Max(75, track.PositionUncertaintyM * 0.8);
+        foreach (var trackId in Sim.LatestSnapshot.HostileTracks.Take(3).Select(track => track.TrackId))
+        {
+            var liveTrack = Sim.Radar.TrackManager.GetById(trackId);
+            if (liveTrack == null)
+                continue;
+
+            liveTrack.PositionUncertaintyM = Math.Max(75, liveTrack.PositionUncertaintyM * 0.8);
+            liveTrack.UpdateThreatAssessment();
+        }
     }
 
     private void ApplyOpenFrequencyWarningEffect()
@@ -469,6 +496,84 @@ public partial class MainViewModel
         Sim.RefreshSnapshot();
         RefreshFromSimulationSnapshot();
     }
+
+    private string BuildSupportRecommendationText()
+    {
+        string key = BuildRecommendedSupportCommandKey();
+        return key.Length == 0
+            ? "SUPPORT RECOMMEND: HOLD TASKING IN RESERVE UNTIL A CLEARER THREAT OR OBJECTIVE PRESSURE EMERGES."
+            : $"SUPPORT RECOMMEND: {BuildSupportRecommendationBody(key)}";
+    }
+
+    private string BuildRecommendedSupportCommandKey()
+    {
+        if (!SimulationRunning || CurrentSnapshot == null)
+            return string.Empty;
+
+        var threatenedObjective = TacticalObjectives.FirstOrDefault(objective => objective.IsUnderAttack)
+            ?? TacticalObjectives.FirstOrDefault(objective => objective.IsThreatened);
+        var threatState = SelectedTrack == null
+            ? null
+            : CurrentSnapshot.TrackThreatStates.FirstOrDefault(state => state.TrackId == SelectedTrack.TrackId);
+
+        if (SelectedTrack != null)
+        {
+            if (SelectedTrack.Classification == TrackClassification.Unknown ||
+                (CurrentSnapshot.Battery?.ROE == RulesOfEngagement.WeaponsTight &&
+                 SelectedTrack.Classification is not (TrackClassification.Hostile or TrackClassification.AssumedHostile)))
+            {
+                return "declare";
+            }
+
+            if (threatState?.CurrentCountermeasureType.Contains("ECM", StringComparison.OrdinalIgnoreCase) == true ||
+                threatState?.CurrentCountermeasureType.Contains("CHAFF", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return "jam";
+            }
+
+            if (threatenedObjective != null && SelectedTrack.RangeNm <= threatenedObjective.RangeNm + 10)
+                return SelectedTrack.RangeNm <= 28 ? "battery" : "cap";
+
+            if (SelectedTrack.ThreatLevel >= 0.75)
+                return "cap";
+        }
+
+        if (HostileCount >= 5)
+            return "awacs";
+
+        if (HostileCount >= 2 || threatenedObjective != null)
+            return "picture";
+
+        return string.Empty;
+    }
+
+    private string BuildRecommendedSupportActionText()
+    {
+        string key = RecommendedSupportCommandKey;
+        return key switch
+        {
+            "declare" => "REQUEST DECLARE",
+            "picture" => "REQUEST PICTURE",
+            "awacs" => "TASK AWACS",
+            "cap" => "DIVERT CAP",
+            "jam" => "TASK JAMMER",
+            "battery" => "TASK BRAVO",
+            _ => "SUPPORT STANDBY"
+        };
+    }
+
+    private string BuildSupportRecommendationBody(string key) => key switch
+    {
+        "declare" => SelectedTrack != null
+            ? $"REQUEST DECLARE ON {SelectedTrackId} BEFORE COMMITTING THE SHOT."
+            : "REQUEST DECLARE ON THE LEAD UNKNOWN CONTACT.",
+        "picture" => "PULL A FRESH PICTURE TO TIGHTEN PACKAGE SORT AND OBJECTIVE PRIORITY.",
+        "awacs" => "WIDEN THE RAID PICTURE WITH AWACS SUPPORT BEFORE THE NEXT AXIS COMMITS.",
+        "cap" => "DIVERT CAP TO THICKEN THE OUTER SCREEN AHEAD OF THE PRESSURED OBJECTIVE.",
+        "jam" => "TASK STANDOFF JAMMING TO DEGRADE ECM-SUPPORTED PACKAGE COORDINATION.",
+        "battery" => "OPEN A CROSSFIRE LANE WITH BRAVO TO COVER THE INNER-RING APPROACH.",
+        _ => "HOLD TASKING IN RESERVE."
+    };
 }
 
 public partial class SupportPackageViewModel : ObservableObject

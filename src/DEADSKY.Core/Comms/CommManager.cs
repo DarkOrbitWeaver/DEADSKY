@@ -1,4 +1,5 @@
 using DEADSKY.Core.Entities;
+using System.Collections.Concurrent;
 
 namespace DEADSKY.Core.Comms;
 
@@ -145,7 +146,7 @@ public record RadioMessage
 public class CommManager
 {
     private readonly Dictionary<RadioChannel, List<RadioMessage>> _history = new();
-    private readonly Queue<RadioMessage> _outgoingQueue = new();
+    private readonly ConcurrentQueue<RadioMessage> _outgoingQueue = new();
 
     public event Action<RadioMessage>? MessageReceived;
     public event Action<RadioMessage>? FlashMessageReceived;
@@ -174,9 +175,9 @@ public class CommManager
     public int ProcessQueue(int maxPerTick = 3)
     {
         int processed = 0;
-        while (_outgoingQueue.Count > 0 && processed < maxPerTick)
+        while (processed < maxPerTick && _outgoingQueue.TryDequeue(out var message))
         {
-            Send(_outgoingQueue.Dequeue());
+            Send(message);
             processed++;
         }
 

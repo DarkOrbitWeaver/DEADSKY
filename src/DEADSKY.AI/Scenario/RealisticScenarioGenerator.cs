@@ -46,7 +46,7 @@ public sealed class RealisticScenarioGenerator
                 BuildSchema(),
                 strict: true,
                 temperature: 0.2,
-                maxTokens: 900,
+                maxTokens: 2048,
                 ct: ct);
 
             if (json == null)

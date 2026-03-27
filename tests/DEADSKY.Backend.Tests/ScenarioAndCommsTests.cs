@@ -1,4 +1,5 @@
 using DEADSKY.Core.Comms;
+using DEADSKY.Core.Entities;
 using DEADSKY.Core.Scenario;
 using DEADSKY.Core.Simulation;
 
@@ -19,6 +20,27 @@ public class ScenarioAndCommsTests
 
         manager.Update(121);
         Assert.Equal(3, sim.Entities.GetHostileAircraft().Count);
+    }
+
+    [Fact]
+    public void ScenarioManager_SpawnedAircraft_InheritMissionObjectiveAndRouteMetadata()
+    {
+        using var sim = new SimulationEngine();
+        var scenario = SimulationTestFactory.CreateOperationScenarioWithObjectives();
+        var manager = new ScenarioManager(sim);
+
+        manager.LoadScenario(scenario);
+        manager.Update(7);
+
+        var aircraft = sim.Entities.GetHostileAircraft().OfType<Aircraft>().First();
+        Assert.Equal("LANCER-1", aircraft.GroupId);
+        Assert.Equal("strike", aircraft.PackageRoleLabel, ignoreCase: true);
+        Assert.Equal("depot", aircraft.MissionObjectiveId, ignoreCase: true);
+        Assert.Equal("Kovran Depot", aircraft.MissionObjectiveName);
+        Assert.Equal("SABLE GAP", aircraft.EntryLabel);
+        Assert.True(aircraft.TargetWaypoint.HasValue);
+        Assert.True(aircraft.ObjectivePosition.HasValue);
+        Assert.Equal(AircraftBehavior.IngressAttack, aircraft.CurrentBehavior);
     }
 
     [Fact]

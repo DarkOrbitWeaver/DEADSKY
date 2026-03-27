@@ -349,6 +349,26 @@ public class SimulationEngineTests
     }
 
     [Fact]
+    public void RefreshSnapshot_CarriesMissionMetadata_IntoHostileAircraftClones()
+    {
+        using var sim = new SimulationEngine();
+        var scenario = SimulationTestFactory.CreateOperationScenarioWithObjectives();
+        var manager = new ScenarioManager(sim);
+
+        manager.LoadScenario(scenario);
+        manager.Update(7);
+        sim.RefreshSnapshot();
+
+        var hostile = sim.LatestSnapshot.HostileAircraft.First();
+        Assert.Equal("LANCER-1", hostile.GroupId);
+        Assert.Equal("strike", hostile.PackageRoleLabel, ignoreCase: true);
+        Assert.Equal("depot", hostile.MissionObjectiveId, ignoreCase: true);
+        Assert.Equal("Kovran Depot", hostile.MissionObjectiveName);
+        Assert.Equal("SABLE GAP", hostile.EntryLabel);
+        Assert.True(hostile.ObjectivePosition.HasValue);
+    }
+
+    [Fact]
     public void PlayerFire_OnFriendlyTrack_IsDeniedAndRecordsFriendlyFireIncident()
     {
         using var sim = SimulationTestFactory.CreateLoadedSimulation();

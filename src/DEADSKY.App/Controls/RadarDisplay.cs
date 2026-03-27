@@ -6,6 +6,7 @@ using SkiaSharp.Views.WPF;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
+using DEADSKY.Core.Logging;
 using DEADSKY.Core.Physics;
 using DEADSKY.Core.Radar;
 using DEADSKY.Core.Simulation;
@@ -64,10 +65,20 @@ public class RadarDisplay : SKElement
         DependencyProperty.Register(nameof(FriendlyForces), typeof(IEnumerable<FriendlyForceState>),
             typeof(RadarDisplay), new PropertyMetadata(null));
 
+    public static readonly DependencyProperty OperationalPictureProperty =
+        DependencyProperty.Register(nameof(OperationalPicture), typeof(SharedOperationalPicture),
+            typeof(RadarDisplay), new PropertyMetadata(null));
+
     public IEnumerable<FriendlyForceState>? FriendlyForces
     {
         get => (IEnumerable<FriendlyForceState>?)GetValue(FriendlyForcesProperty);
         set => SetValue(FriendlyForcesProperty, value);
+    }
+
+    public SharedOperationalPicture? OperationalPicture
+    {
+        get => (SharedOperationalPicture?)GetValue(OperationalPictureProperty);
+        set => SetValue(OperationalPictureProperty, value);
     }
 
     // Events
@@ -79,9 +90,11 @@ public class RadarDisplay : SKElement
     private float _displayRadius;
     private SKPoint _center;
     private readonly DispatcherTimer _renderTimer;
+    private readonly DispatcherTimer _resizeDebounceTimer;
     private SKPicture? _staticLayerPicture;
     private SKImageInfo _staticLayerInfo;
     private double _staticLayerRangeNm = -1;
+    private bool _isPainting;
 
     // Phosphor persistence: track last-seen times for fade
     private readonly Dictionary<string, (float px, float py, double sweepTime)> _phosphorTrails = new();
@@ -98,6 +111,7 @@ public class RadarDisplay : SKElement
     private readonly SKPaint _hostilePaint = new() { Color = new SKColor(255, 50, 50), IsAntialias = true };
     private readonly SKPaint _friendlyPaint = new() { Color = new SKColor(50, 150, 255), IsAntialias = true };
     private readonly SKPaint _unknownPaint = new() { Color = new SKColor(255, 255, 50), IsAntialias = true };
+    private readonly SKPaint _civilianPaint = new() { Color = new SKColor(50, 255, 110), IsAntialias = true };
     private readonly SKPaint _missilePaint = new() { Color = new SKColor(255, 100, 0), IsAntialias = true };
     private readonly SKPaint _trackLabelPaint = new()
     {
@@ -127,23 +141,34 @@ public class RadarDisplay : SKElement
     {
         Focusable = true;
         Cursor = Cursors.Cross;
-        _renderTimer = new DispatcherTimer(DispatcherPriority.Render)
+        _renderTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
-            Interval = TimeSpan.FromMilliseconds(16)
+            Interval = TimeSpan.FromMilliseconds(33)
         };
         _renderTimer.Tick += OnRenderTick;
+        _resizeDebounceTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(140)
+        };
+        _resizeDebounceTimer.Tick += OnResizeDebounceTick;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         IsVisibleChanged += OnIsVisibleChanged;
         SizeChanged += (_, _) =>
         {
             InvalidateStaticLayerCache();
-            InvalidateVisual();
+            SuspendRenderingForResize();
         };
     }
 
     protected override void OnPaintSurface(SKPaintSurfaceEventArgs e)
     {
+        if (_isPainting)
+            return;
+
+        _isPainting = true;
+        try
+        {
         var canvas = e.Surface.Canvas;
         var info = e.Info;
 
@@ -168,12 +193,18 @@ public class RadarDisplay : SKElement
         DrawPhosphorTrails(canvas);
         DrawContacts(canvas);
         DrawFriendlySupport(canvas);
+        DrawObjectiveOverlays(canvas);
         DrawMissiles(canvas);
         DrawSweepLine(canvas);
 
         canvas.Restore();
 
         DrawHUD(canvas, info);
+        }
+        finally
+        {
+            _isPainting = false;
+        }
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -185,6 +216,7 @@ public class RadarDisplay : SKElement
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
         _renderTimer.Stop();
+        _resizeDebounceTimer.Stop();
         InvalidateStaticLayerCache();
     }
 
@@ -197,15 +229,22 @@ public class RadarDisplay : SKElement
 
     private void OnRenderTick(object? sender, EventArgs e)
     {
-        if (!IsVisible || !IsLoaded || ActualWidth < 2 || ActualHeight < 2)
+        if (!IsVisible || !IsLoaded || ActualWidth < 2 || ActualHeight < 2 || _resizeDebounceTimer.IsEnabled || _isPainting)
             return;
 
         InvalidateVisual();
     }
 
+    private void OnResizeDebounceTick(object? sender, EventArgs e)
+    {
+        _resizeDebounceTimer.Stop();
+        UpdateRenderTimerState();
+        InvalidateVisual();
+    }
+
     private void UpdateRenderTimerState()
     {
-        if (IsLoaded && IsVisible)
+        if (IsLoaded && IsVisible && !_resizeDebounceTimer.IsEnabled)
         {
             if (!_renderTimer.IsEnabled)
                 _renderTimer.Start();
@@ -214,6 +253,13 @@ public class RadarDisplay : SKElement
         {
             _renderTimer.Stop();
         }
+    }
+
+    private void SuspendRenderingForResize()
+    {
+        _renderTimer.Stop();
+        _resizeDebounceTimer.Stop();
+        _resizeDebounceTimer.Start();
     }
 
     private void EnsureStaticLayerCache(SKImageInfo info)
@@ -404,6 +450,7 @@ public class RadarDisplay : SKElement
 
         foreach (var track in _snapshot.AllTracks)
         {
+            var threatState = _snapshot.TrackThreatStates.FirstOrDefault(state => state.TrackId == track.TrackId);
             var (px, py) = CoordinateSystem.ToRadarScreen(track.Position, rangeNm, _displayRadius);
             float cx = _center.X + px;
             float cy = _center.Y + py;
@@ -463,6 +510,30 @@ public class RadarDisplay : SKElement
                 canvas.DrawCircle(cx, cy, blipSize + (track.IsDesignated ? 5 : 3), holdPaint);
             }
 
+            if (threatState?.MissileInbound == true)
+            {
+                using var inboundPaint = new SKPaint
+                {
+                    Color = new SKColor(255, 160, 80, 180),
+                    IsStroke = true,
+                    StrokeWidth = 1.2f,
+                    IsAntialias = true
+                };
+                canvas.DrawCircle(cx, cy, blipSize + 8, inboundPaint);
+            }
+            else if (threatState?.CountermeasureActive == true)
+            {
+                using var cmPaint = new SKPaint
+                {
+                    Color = new SKColor(255, 255, 180, 150),
+                    IsStroke = true,
+                    StrokeWidth = 1.0f,
+                    IsAntialias = true,
+                    PathEffect = SKPathEffect.CreateDash([4, 4], 0)
+                };
+                canvas.DrawCircle(cx, cy, blipSize + 6, cmPaint);
+            }
+
             // Velocity vector
             if (track.SpeedMps > 10)
             {
@@ -478,7 +549,13 @@ public class RadarDisplay : SKElement
             var labelColor = GetTrackColor(track);
             _trackLabelPaint.Color = new SKColor(labelColor.Red, labelColor.Green, labelColor.Blue, 200);
             string shortTrackId = track.TrackId.Replace("TRK-", "");
-            string lockCue = track.IsDesignated ? " STT" : track.IsTrackHeld ? " TWS" : string.Empty;
+            string lockCue = threatState?.LockCue switch
+            {
+                LockCueState.MissileInbound => " MSL",
+                LockCueState.HardLock => " STT",
+                LockCueState.TrackHold => " TWS",
+                _ => string.Empty
+            };
             canvas.DrawText(shortTrackId + lockCue, cx + 7, cy - 3, _trackLabelPaint);
 
             if (ShowAltitudeLabels)
@@ -594,7 +671,7 @@ public class RadarDisplay : SKElement
 
         canvas.DrawText($"RNG: {_snapshot.RadarRangeNm:F0}nm  MODE: {_snapshot.RadarMode,-12}  TRACKS: {_snapshot.AllTracks.Count}",
             8, y, _hudPaint);
-        canvas.DrawText($"SWEEP: {_snapshot.RadarSweepAngle:F0}°  HOLD: {heldTracks}  KILLS: {battery.ConfirmedKills}  MSLS: {battery.ReserveMissiles}",
+        canvas.DrawText($"SWEEP: {_snapshot.RadarSweepAngle:F0}deg  HOLD: {heldTracks}  KILLS: {battery.ConfirmedKills}  MSLS: {battery.ReserveMissiles}",
             8, y + 14, _hudPaint);
     }
 
@@ -653,8 +730,42 @@ public class RadarDisplay : SKElement
         {
             TrackClassification.Hostile or TrackClassification.AssumedHostile => _hostilePaint,
             TrackClassification.Friendly => _friendlyPaint,
+            TrackClassification.Civilian or TrackClassification.Neutral => _civilianPaint,
             _ => _unknownPaint
         };
+    }
+
+    private void DrawObjectiveOverlays(SKCanvas canvas)
+    {
+        if (_snapshot == null || OperationalPicture == null)
+            return;
+
+        double rangeNm = _snapshot.RadarRangeNm;
+        foreach (var marker in OperationalPicture.TacticalMarkers.Where(marker =>
+                     marker.Kind is TacticalMarkerKind.ObjectivePrimary or TacticalMarkerKind.ObjectiveSecondary or TacticalMarkerKind.ObjectiveThreatened or TacticalMarkerKind.ObjectiveBreached))
+        {
+            var (px, py) = CoordinateSystem.ToRadarScreen(marker.Position, rangeNm, _displayRadius);
+            float cx = _center.X + px;
+            float cy = _center.Y + py;
+            if (Math.Sqrt(px * px + py * py) > _displayRadius - 8)
+                continue;
+
+            using var paint = new SKPaint
+            {
+                Color = marker.Kind switch
+                {
+                    TacticalMarkerKind.ObjectivePrimary => new SKColor(255, 214, 92, 200),
+                    TacticalMarkerKind.ObjectiveSecondary => new SKColor(140, 196, 255, 180),
+                    _ => new SKColor(255, 112, 92, 220)
+                },
+                IsStroke = true,
+                StrokeWidth = 1.4f,
+                IsAntialias = true
+            };
+            canvas.DrawRect(cx - 5, cy - 5, 10, 10, paint);
+            _trackLabelPaint.Color = paint.Color;
+            canvas.DrawText(marker.Label.ToUpperInvariant(), cx + 7, cy - 3, _trackLabelPaint);
+        }
     }
 
     // ── Mouse interaction ──────────────────────────────────────────────
@@ -726,15 +837,19 @@ public class RadarDisplay : SKElement
     {
         if (d is RadarDisplay rd)
         {
+            GameLogger.Debug("RADAR-UI", $"Snapshot changed on thread {Environment.CurrentManagedThreadId}");
             rd._snapshot = e.NewValue as SimulationSnapshot;
             if (e.OldValue is SimulationSnapshot oldSnapshot &&
                 e.NewValue is SimulationSnapshot newSnapshot &&
                 Math.Abs(oldSnapshot.RadarRangeNm - newSnapshot.RadarRangeNm) >= 0.1)
             {
+                GameLogger.Info("RADAR-UI", $"Radar range changed from {oldSnapshot.RadarRangeNm:F1} to {newSnapshot.RadarRangeNm:F1}, invalidating cache");
                 rd.InvalidateStaticLayerCache();
             }
 
-            rd.InvalidateVisual();
+            // REMOVED: Redundant InvalidateVisual() call that was causing excessive redraws
+            // The render timer already handles periodic updates at 30fps
+            // Snapshot updates happen 10x/sec, creating unnecessary paint queue buildup
         }
     }
 
@@ -761,7 +876,8 @@ public class RadarDisplay : SKElement
             canvas.DrawLine(cx - 7, cy, cx + 7, cy, supportPaint);
             canvas.DrawLine(cx, cy - 7, cx, cy + 7, supportPaint);
             _trackLabelPaint.Color = new SKColor(90, 200, 255, 220);
-            canvas.DrawText(force.Callsign, cx + 8, cy - 3, _trackLabelPaint);
+            string roleBadge = force.MarkerClass.Replace("support-", string.Empty).ToUpperInvariant();
+            canvas.DrawText($"{force.Callsign} {roleBadge}", cx + 8, cy - 3, _trackLabelPaint);
         }
     }
 }

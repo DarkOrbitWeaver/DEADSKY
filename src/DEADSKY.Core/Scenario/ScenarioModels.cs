@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DEADSKY.Core.Comms;
 using DEADSKY.Core.Entities;
+using DEADSKY.Core.Physics;
 using DEADSKY.Core.Simulation;
 
 namespace DEADSKY.Core.Scenario;
@@ -221,7 +222,14 @@ public sealed class ScenarioManager
         string waveName = string.IsNullOrWhiteSpace(wave.PackageName)
             ? $"WAVE-{index + 1}"
             : wave.PackageName;
+        var targetObjective = CurrentScenario?.SectorMap.Objectives.FirstOrDefault(objective =>
+            objective.Id.Equals(wave.TargetObjectiveId, StringComparison.OrdinalIgnoreCase));
+        Vec2? objectivePosition = targetObjective == null
+            ? null
+            : CoordinateSystem.FromBearingRange(targetObjective.BearingDeg, targetObjective.RangeNm);
         int spawned = 0;
+        string? formationLeaderId = null;
+        int formationSlot = 0;
 
         foreach (var spawn in wave.Aircraft)
         {
@@ -238,6 +246,18 @@ public sealed class ScenarioManager
 
                 aircraft.AggressivenessLevel = spawn.Aggressiveness;
                 aircraft.GroupId = waveName;
+                aircraft.PackageRoleLabel = string.IsNullOrWhiteSpace(wave.PackageRole)
+                    ? spawn.InitialBehavior.Replace('_', ' ')
+                    : wave.PackageRole.Replace('_', ' ');
+                aircraft.EntryLabel = wave.EntryLabel;
+                aircraft.MissionObjectiveId = targetObjective?.Id;
+                aircraft.MissionObjectiveName = targetObjective?.Name;
+                aircraft.ObjectivePosition = objectivePosition;
+                aircraft.TargetWaypoint = objectivePosition;
+                aircraft.CurrentBehavior = ParseBehavior(spawn.InitialBehavior, aircraft.Role);
+                aircraft.FormationSlot = formationSlot++;
+                formationLeaderId ??= aircraft.Id;
+                aircraft.FormationLeaderId = formationLeaderId;
                 spawned++;
             }
         }
@@ -248,6 +268,37 @@ public sealed class ScenarioManager
             : wave.PackageRole.Replace('_', ' ');
         string entryText = string.IsNullOrWhiteSpace(wave.EntryLabel) ? "" : $" via {wave.EntryLabel}";
         OnWaveSpawned?.Invoke($"{waveName} {roleText}{entryText} ({spawned} hostile aircraft)");
+    }
+
+    private static AircraftBehavior ParseBehavior(string? initialBehavior, AircraftRole role)
+    {
+        if (string.IsNullOrWhiteSpace(initialBehavior))
+        {
+            return role switch
+            {
+                AircraftRole.ECMEscort => AircraftBehavior.ECMStandoff,
+                AircraftRole.SEAD => AircraftBehavior.SEAD,
+                _ => AircraftBehavior.IngressAttack
+            };
+        }
+
+        return initialBehavior.Trim().ToLowerInvariant() switch
+        {
+            "ingress_attack" => AircraftBehavior.IngressAttack,
+            "egress_retreat" => AircraftBehavior.EgressRetreat,
+            "orbit_patrol" => AircraftBehavior.OrbitPatrol,
+            "defensive_beam" => AircraftBehavior.DefensiveBeam,
+            "escort_cover" => AircraftBehavior.EscortCover,
+            "evasive_maneuver" => AircraftBehavior.EvasiveManeuver,
+            "terrain_following" => AircraftBehavior.TerrainFollowing,
+            "pop_up_attack" => AircraftBehavior.PopUpAttack,
+            "feint" => AircraftBehavior.Feint,
+            "ecm_standoff" => AircraftBehavior.ECMStandoff,
+            "sead" => AircraftBehavior.SEAD,
+            "bda" => AircraftBehavior.BDA,
+            "loiter" => AircraftBehavior.Loiter,
+            _ => AircraftBehavior.IngressAttack
+        };
     }
 
     private void ResolveMission(MissionOutcome outcome, string reason)

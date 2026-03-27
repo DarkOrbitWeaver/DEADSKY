@@ -11,6 +11,7 @@
         Width="1640"
         Background="{StaticResource ConsoleBgBrush}"
         WindowStartupLocation="CenterScreen"
+        WindowState="Maximized"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True">
     <Window.Resources>
@@ -43,6 +44,14 @@
                         </Border>
                     </StackPanel>
                     <DockPanel DockPanel.Dock="Right" LastChildFill="False" VerticalAlignment="Center">
+                        <Button Content="SETTINGS"
+                                Style="{StaticResource MilButton}"
+                                Click="OnOpenSettings"
+                                Margin="0,0,10,0"/>
+                        <Button Content="LOGISTICS"
+                                Style="{StaticResource MilButton}"
+                                Click="OnOpenLogistics"
+                                Margin="0,0,10,0"/>
                         <Button Content="TACTICAL MAP"
                                 Style="{StaticResource MilButton}"
                                 Click="OnOpenTacticalMap"
@@ -100,6 +109,7 @@
                                                    Margin="8"
                                                    Snapshot="{Binding CurrentSnapshot}"
                                                    FriendlyForces="{Binding VisibleFriendlyForces}"
+                                                   OperationalPicture="{Binding OperationalPicture}"
                                                    ShowAltitudeLabels="{Binding ShowRadarAltitudeLabels}"
                                                    ShowTrackTrails="{Binding ShowRadarTrackTrails}"
                                                    SelectedTrackId="{Binding SelectedTrackId, Mode=TwoWay}"/>
@@ -270,7 +280,9 @@
                                         <Border Style="{StaticResource MilInsetCard}" Margin="0,8,0,0" BorderBrush="{StaticResource CardAccentBlueBrush}">
                                             <StackPanel>
                                                 <TextBlock Text="{Binding OperationalPictureText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding RecommendedActionSummaryText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,6,0,0" />
                                                 <TextBlock Text="{Binding VisibleFriendlyForceText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                                <TextBlock Text="{Binding CommandTrustText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0" />
                                             </StackPanel>
                                         </Border>
                                         <WrapPanel Margin="0,10,0,0">
@@ -383,6 +395,9 @@
                                     <TextBlock Text="{Binding SupportActivitySummaryText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                                     <TextBlock Text="{Binding CommandConfidenceText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                                     <TextBlock Text="{Binding SupportConsequenceText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                    <Border Style="{StaticResource ChipBorder}" Background="#132231" BorderBrush="{StaticResource CardAccentBlueBrush}" Margin="0,6,0,0">
+                                        <TextBlock Text="{Binding SupportRecommendationText}" Style="{StaticResource ChipText}" TextWrapping="Wrap"/>
+                                    </Border>
                                     <TextBlock Text="{Binding VisibleSupportPictureText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                                     <ItemsControl ItemsSource="{Binding SupportPackages}" Margin="0,8,0,0">
                                         <ItemsControl.ItemTemplate>
@@ -475,15 +490,15 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Style="{StaticResource SmallText}" TextTrimming="CharacterEllipsis">
-                                                    <Run Text="{Binding Bearing}"/>
+                                                    <Run Text="{Binding Bearing, Mode=OneWay}"/>
                                                     <Run Text="/"/>
-                                                    <Run Text="{Binding RangeText}"/>
+                                                    <Run Text="{Binding RangeText, Mode=OneWay}"/>
                                                     <Run Text=" "/>
-                                                    <Run Text="{Binding AltitudeText}"/>
+                                                    <Run Text="{Binding AltitudeText, Mode=OneWay}"/>
                                                     <Run Text=" "/>
-                                                    <Run Text="{Binding Aspect}"/>
+                                                    <Run Text="{Binding Aspect, Mode=OneWay}"/>
                                                     <Run Text=" | "/>
-                                                    <Run Text="{Binding StateDisplay}"/>
+                                                    <Run Text="{Binding StateDisplay, Mode=OneWay}"/>
                                                 </TextBlock>
                                                 <TextBlock Grid.Column="1" Text="{Binding PackageLabel}" Style="{StaticResource SubtleText}" Margin="8,0,0,0" TextTrimming="CharacterEllipsis"/>
                                             </Grid>
@@ -658,6 +673,10 @@
                                                    Margin="0,2,0,0"
                                                    TextWrapping="Wrap"
                                                    ToolTip="{Binding ActiveChannelEffectText}" />
+                                        <TextBlock Text="{Binding SupportRecommendationText}"
+                                                   Style="{StaticResource SmallText}"
+                                                   Margin="0,6,0,0"
+                                                   TextWrapping="Wrap" />
                                         <WrapPanel Margin="0,6,0,0">
                                             <Button Content="ACK" Style="{StaticResource MilButton}" Command="{Binding SendQuickCommandCommand}" CommandParameter="ack" ToolTip="Send a quick acknowledgment on the active net." />
                                             <Button Content="PICTURE" Style="{StaticResource MilButton}" Margin="4,0,0,0" Command="{Binding SendQuickCommandCommand}" CommandParameter="picture" ToolTip="Request a refreshed air picture." />
@@ -666,6 +685,17 @@
                                             <Button Content="WARN" Style="{StaticResource MilButton}" Margin="4,0,0,0" Command="{Binding SendWarningReplyCommand}" ToolTip="Issue an immediate turn-away warning." />
                                             <Button Content="STATUS" Style="{StaticResource MilButton}" Margin="4,0,0,0" Command="{Binding SendQuickCommandCommand}" CommandParameter="status" ToolTip="Transmit a battery status report." />
                                             <Button Content="REPEAT" Style="{StaticResource MilButton}" Margin="4,0,0,0" Command="{Binding SendRepeatReplyCommand}" ToolTip="Request a repeated transmission." />
+                                        </WrapPanel>
+                                        <WrapPanel Margin="0,6,0,0">
+                                            <Button Content="{Binding RecommendedSupportActionText}"
+                                                    Style="{StaticResource MilButton}"
+                                                    Command="{Binding SendQuickCommandCommand}"
+                                                    CommandParameter="{Binding RecommendedSupportCommandKey}"
+                                                    ToolTip="Send the currently recommended support request based on the live picture." />
+                                            <Button Content="TASK AWACS" Style="{StaticResource MilButton}" Margin="4,0,0,0" Command="{Binding SendQuickCommandCommand}" CommandParameter="awacs" ToolTip="Request wide-area picture support." />
+                                            <Button Content="DIVERT CAP" Style="{StaticResource MilButton}" Margin="4,0,0,0" Command="{Binding SendQuickCommandCommand}" CommandParameter="cap" ToolTip="Request allied fighter diversion to the sector." />
+                                            <Button Content="TASK JAMMER" Style="{StaticResource MilButton}" Margin="4,0,0,0" Command="{Binding SendQuickCommandCommand}" CommandParameter="jam" ToolTip="Request standoff jamming support." />
+                                            <Button Content="TASK BRAVO" Style="{StaticResource MilButton}" Margin="4,0,0,0" Command="{Binding SendQuickCommandCommand}" CommandParameter="battery" ToolTip="Request nearby battery crossfire support." />
                                         </WrapPanel>
                                     </StackPanel>
                                     <Grid Grid.Row="3">
@@ -819,14 +849,14 @@
         </Grid>
 
         <Grid Visibility="{Binding IsCommandMenuOpen, Converter={StaticResource BoolToVisibilityConverter}}">
-            <Border Width="520"
+            <Border Width="440"
                     Margin="12"
                     HorizontalAlignment="Left"
                     VerticalAlignment="Stretch"
-                    Background="#48101820"
+                    Background="#420B1622"
                     CornerRadius="8"
                     IsHitTestVisible="False"/>
-            <Border Width="470"
+            <Border Width="396"
                     Margin="24"
                     HorizontalAlignment="Left"
                     VerticalAlignment="Stretch"
@@ -890,129 +920,39 @@
                                 </StackPanel>
                             </ScrollViewer>
                         </TabItem>
-                        <TabItem Header="Settings">
+                        <TabItem Header="Consoles">
                             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="12">
                                 <StackPanel>
-                                    <TextBlock Text="LIVE SETTINGS" Style="{StaticResource HeaderText}"/>
-                                    <TextBlock Text="These are active gameplay/UI switches, not dead legacy placeholders." Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
-                                    <CheckBox Content="Auto-focus scope range to selected track"
-                                              IsChecked="{Binding AutoFocusSelectedTrack}"
-                                              Margin="0,12,0,0"/>
-                                    <CheckBox Content="Show altitude and speed labels on radar contacts"
-                                              IsChecked="{Binding ShowRadarAltitudeLabels}"
-                                              Margin="0,10,0,0"/>
-                                    <CheckBox Content="Show radar track trails and held-track memory lines"
-                                              IsChecked="{Binding ShowRadarTrackTrails}"
-                                              Margin="0,10,0,0"/>
-                                    <CheckBox Content="Show tactical map labels and sector notes"
-                                              IsChecked="{Binding ShowTacticalMapLabels}"
-                                              Margin="0,10,0,0"/>
-                                    <TextBlock Text="Map zoom is independent from the radar scope range. Changing one will not disturb the other." Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,12,0,0"/>
-                                </StackPanel>
-                            </ScrollViewer>
-                        </TabItem>
-                        <TabItem Header="Logistics">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="12">
-                                <StackPanel>
-                                    <TextBlock Text="ARMORY / CAMPAIGN" Style="{StaticResource SectionKicker}"/>
-                                    <TextBlock Text="CAMPAIGN &amp; LOGISTICS" Style="{StaticResource HeaderText}"/>
-                                    <Border Style="{StaticResource MilAccentCard}" Margin="0,10,0,0" BorderBrush="{StaticResource CardAccentBlueBrush}">
+                                    <TextBlock Text="SUPPORT CONSOLES" Style="{StaticResource HeaderText}"/>
+                                    <TextBlock Text="Dense administrative systems now open in dedicated windows so the station stays readable during live combat." Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                    <Border Style="{StaticResource MilAccentCard}" Margin="0,12,0,0" BorderBrush="{StaticResource CardAccentBlueBrush}">
                                         <StackPanel>
-                                            <TextBlock Text="{Binding ArmoryHeadlineText}" Style="{StaticResource PrimaryText}"/>
-                                            <TextBlock Text="{Binding LogisticsTempoText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                            <TextBlock Text="{Binding CampaignPersistenceSummaryText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                            <TextBlock Text="{Binding CampaignSavePathText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                            <WrapPanel Margin="0,10,0,0">
-                                                <Button Content="SAVE PROFILE" Style="{StaticResource MilButton}" Command="{Binding SaveCampaignNowCommand}"/>
-                                            </WrapPanel>
+                                            <TextBlock Text="STATION SETTINGS" Style="{StaticResource PrimaryText}"/>
+                                            <TextBlock Text="Display toggles and operator comfort settings now live in a separate settings console." Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                            <Button Content="OPEN SETTINGS"
+                                                    Style="{StaticResource MilButton}"
+                                                    Click="OnOpenSettings"
+                                                    Margin="0,10,0,0"/>
                                         </StackPanel>
                                     </Border>
-                                    <UniformGrid Rows="1" Columns="3" Margin="0,10,0,0">
-                                        <Border Style="{StaticResource MilMetricCard}" Margin="0,0,6,0">
-                                            <StackPanel>
-                                                <TextBlock Text="BUDGET" Style="{StaticResource MetricLabelText}"/>
-                                                <TextBlock Text="{Binding BudgetDisplayText}" Style="{StaticResource PrimaryText}" Margin="0,4,0,0"/>
-                                            </StackPanel>
-                                        </Border>
-                                        <Border Style="{StaticResource MilMetricCard}" Margin="0,0,6,0">
-                                            <StackPanel>
-                                                <TextBlock Text="RANK" Style="{StaticResource MetricLabelText}"/>
-                                                <TextBlock Text="{Binding PlayerRankDisplayText}" Style="{StaticResource PrimaryText}" Margin="0,4,0,0"/>
-                                            </StackPanel>
-                                        </Border>
-                                        <Border Style="{StaticResource MilMetricCard}">
-                                            <StackPanel>
-                                                <TextBlock Text="CAREER" Style="{StaticResource MetricLabelText}"/>
-                                                <TextBlock Text="{Binding CareerSummaryText}" Style="{StaticResource SmallText}" Margin="0,4,0,0" TextWrapping="Wrap"/>
-                                            </StackPanel>
-                                        </Border>
-                                    </UniformGrid>
-                                    <Border Style="{StaticResource MilInsetCard}" Margin="0,10,0,0">
+                                    <Border Style="{StaticResource MilAccentCard}" Margin="0,12,0,0" BorderBrush="{StaticResource CardAccentAmberBrush}">
+                                        <StackPanel>
+                                            <TextBlock Text="ARMORY &amp; LOGISTICS" Style="{StaticResource PrimaryText}"/>
+                                            <TextBlock Text="{Binding ArmoryHeadlineText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                            <TextBlock Text="{Binding LogisticsStatusText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                            <Button Content="OPEN LOGISTICS"
+                                                    Style="{StaticResource MilButton}"
+                                                    Click="OnOpenLogistics"
+                                                    Margin="0,10,0,0"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MilInsetCard}" Margin="0,12,0,0">
                                         <StackPanel>
                                             <TextBlock Text="{Binding OwnedUpgradeSummaryText}" Style="{StaticResource SmallText}" TextWrapping="Wrap"/>
                                             <TextBlock Text="{Binding PendingDeliverySummaryText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                            <TextBlock Text="{Binding LogisticsStatusText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                                             <TextBlock Text="{Binding StoreAvailabilityText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                                         </StackPanel>
                                     </Border>
-                                    <ItemsControl ItemsSource="{Binding RequisitionOptions}" Margin="0,10,0,0">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <Border x:Name="ReqCard"
-                                                        Style="{StaticResource MilInsetCard}"
-                                                        Margin="0,0,0,8">
-                                                    <Grid>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="*"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                        </Grid.ColumnDefinitions>
-                                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                                            <WrapPanel>
-                                                                <Border Style="{StaticResource ChipBorder}" Background="#132231" BorderBrush="{StaticResource CardAccentBlueBrush}">
-                                                                    <TextBlock Text="{Binding CategoryBadgeText}" Style="{StaticResource ChipText}"/>
-                                                                </Border>
-                                                                <Border Style="{StaticResource ChipBorder}" Background="#1A1F14" BorderBrush="{StaticResource CardAccentGreenBrush}">
-                                                                    <TextBlock Text="{Binding AvailabilityText}" Style="{StaticResource ChipText}"/>
-                                                                </Border>
-                                                            </WrapPanel>
-                                                            <TextBlock Text="{Binding DisplayName}" Style="{StaticResource PrimaryText}" Margin="0,4,0,0"/>
-                                                            <TextBlock Text="{Binding Description}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                                            <TextBlock Text="{Binding ImpactText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                                            <WrapPanel Margin="0,6,0,0">
-                                                                <Border Style="{StaticResource ChipBorder}" Background="#1B1510" BorderBrush="{StaticResource CardAccentAmberBrush}">
-                                                                    <TextBlock Text="{Binding RequirementText}" Style="{StaticResource ChipText}"/>
-                                                                </Border>
-                                                                <Border Style="{StaticResource ChipBorder}" Background="#141A21" BorderBrush="{StaticResource PanelBorderBrush}">
-                                                                    <TextBlock Text="{Binding LeadTimeText}" Style="{StaticResource ChipText}"/>
-                                                                </Border>
-                                                            </WrapPanel>
-                                                            <TextBlock Text="{Binding StatusText}" Style="{StaticResource AccentText}" Margin="0,6,0,0"/>
-                                                        </StackPanel>
-                                                        <StackPanel Grid.Column="1" HorizontalAlignment="Right">
-                                                            <TextBlock Text="{Binding CostText}" Style="{StaticResource WarningText}" HorizontalAlignment="Right"/>
-                                                            <Button Content="{Binding OrderActionText}"
-                                                                    Style="{StaticResource MilButton}"
-                                                                    Margin="0,8,0,0"
-                                                                    Command="{Binding DataContext.PurchaseUpgradeCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                                    CommandParameter="{Binding Id}"/>
-                                                        </StackPanel>
-                                                    </Grid>
-                                                </Border>
-                                                <DataTemplate.Triggers>
-                                                    <DataTrigger Binding="{Binding IsOwned}" Value="True">
-                                                        <Setter TargetName="ReqCard" Property="BorderBrush" Value="{StaticResource CardAccentGreenBrush}"/>
-                                                        <Setter TargetName="ReqCard" Property="Background" Value="#102016"/>
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding IsAvailable}" Value="True">
-                                                        <Setter TargetName="ReqCard" Property="BorderBrush" Value="{StaticResource CardAccentBlueBrush}"/>
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding IsRankLocked}" Value="True">
-                                                        <Setter TargetName="ReqCard" Property="BorderBrush" Value="{StaticResource CardAccentAmberBrush}"/>
-                                                    </DataTrigger>
-                                                </DataTemplate.Triggers>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
                                 </StackPanel>
                             </ScrollViewer>
                         </TabItem>

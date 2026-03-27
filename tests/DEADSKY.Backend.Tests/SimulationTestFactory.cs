@@ -156,7 +156,13 @@ internal static class SimulationTestFactory
                 new() { Id = "relay", Name = "Dunewatch Relay", Description = "Regional command relay station.", BearingDeg = 78, RangeNm = 88, Importance = "secondary" }
             }
         };
+        scenario.EnemyForces.Waves[0].PackageName = "LANCER-1";
+        scenario.EnemyForces.Waves[0].PackageRole = "strike";
+        scenario.EnemyForces.Waves[0].EntryLabel = "SABLE GAP";
         scenario.EnemyForces.Waves[0].TargetObjectiveId = "depot";
+        scenario.EnemyForces.Waves[1].PackageName = "SPEAR-2";
+        scenario.EnemyForces.Waves[1].PackageRole = "follow_on_strike";
+        scenario.EnemyForces.Waves[1].EntryLabel = "DUNE CORRIDOR";
         scenario.EnemyForces.Waves[1].TargetObjectiveId = "relay";
         return scenario;
     }

@@ -16,8 +16,18 @@ public partial class MainViewModel
     public ObservableCollection<WeaponOptionViewModel> WeaponOptions { get; } = new();
     public ObservableCollection<IncidentCardViewModel> RecentIncidentCards { get; } = new();
 
-    private SharedOperationalPicture CurrentOperationalPicture =>
-        OperationalPictureBuilder.Build(CurrentSnapshot ?? Sim.LatestSnapshot, Sim.Weapons.Incidents, FriendlySupport.Packages);
+    public SharedOperationalPicture OperationalPicture =>
+        OperationalPictureBuilder.Build(
+            CurrentSnapshot ?? Sim.LatestSnapshot,
+            CurrentScenarioDefinition,
+            Sim.Weapons.Incidents,
+            FriendlySupport.Packages,
+            SelectedTrackId,
+            FriendlySupport.CommandConfidence,
+            FriendlySupport.CommandPostureSummary,
+            FriendlySupport.LiveConsequenceSummary);
+
+    private SharedOperationalPicture CurrentOperationalPicture => OperationalPicture;
 
     public string WeaponLoadoutSummaryText => CurrentSnapshot?.SelectedWeapon == null
         ? "LOADOUT: NO WEAPON SELECTED"
@@ -48,6 +58,15 @@ public partial class MainViewModel
     public string FriendlyFireRiskText => BuildFriendlyFireRiskText();
     public string OperationalPictureText => $"WORLD: {CurrentOperationalPicture.ThreatSummary} {CurrentOperationalPicture.SupportSummary}";
     public string RecentIncidentSummaryText => CurrentOperationalPicture.ConsequenceSummary;
+    public string RecommendedActionSummaryText => CurrentOperationalPicture.RecommendedActionSummary;
+    public string TacticalMapTitleText => CurrentOperationalPicture.ScenarioHeader;
+    public string TacticalMapNotesText => CurrentOperationalPicture.ScenarioNotes;
+    public IReadOnlyList<ObjectiveTacticalState> TacticalObjectives => CurrentOperationalPicture.ObjectiveStates;
+    public string ObjectiveFocusText => TacticalObjectives.Count == 0
+        ? "OBJECTIVE FOCUS: NO ACTIVE OBJECTIVES"
+        : "OBJECTIVE FOCUS: " + string.Join(" | ", TacticalObjectives.Select(objective => $"{objective.Name.ToUpperInvariant()} {objective.Status}"));
+    public string CommsConsequenceText => CurrentOperationalPicture.CommsConsequences.OutstandingWarning;
+    public string CommandTrustText => CurrentOperationalPicture.CommsConsequences.CommandTrustSummary;
     public string RecentIncidentHeadlineText => RecentIncidentCards.Count == 0
         ? "CONSEQUENCE FEED: QUIET"
         : $"CONSEQUENCE FEED: {RecentIncidentCards.Count} LIVE FLAG{(RecentIncidentCards.Count == 1 ? string.Empty : "S")}";
@@ -139,10 +158,21 @@ public partial class MainViewModel
         OnPropertyChanged(nameof(FriendlyFireRiskText));
         OnPropertyChanged(nameof(OperationalPictureText));
         OnPropertyChanged(nameof(RecentIncidentSummaryText));
+        OnPropertyChanged(nameof(RecommendedActionSummaryText));
+        OnPropertyChanged(nameof(TacticalMapTitleText));
+        OnPropertyChanged(nameof(TacticalMapNotesText));
+        OnPropertyChanged(nameof(TacticalObjectives));
+        OnPropertyChanged(nameof(ObjectiveFocusText));
+        OnPropertyChanged(nameof(CommsConsequenceText));
+        OnPropertyChanged(nameof(CommandTrustText));
+        OnPropertyChanged(nameof(SupportRecommendationText));
+        OnPropertyChanged(nameof(RecommendedSupportCommandKey));
+        OnPropertyChanged(nameof(RecommendedSupportActionText));
         OnPropertyChanged(nameof(RecentIncidentHeadlineText));
         OnPropertyChanged(nameof(VisibleFriendlyForces));
         OnPropertyChanged(nameof(VisibleFriendlyForceText));
         OnPropertyChanged(nameof(AbortAvailabilityText));
+        OnPropertyChanged(nameof(OperationalPicture));
     }
 
     private void RefreshRecentIncidentCards()
