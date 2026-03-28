@@ -1,4 +1,6 @@
+using DEADSKY.Core.Logging;
 using DEADSKY.Core.Physics;
+using DEADSKY.Core.Comms;
 
 namespace DEADSKY.Core.Entities;
 
@@ -30,6 +32,13 @@ public enum AircraftRole
     Recon,
     Tanker,
     Decoy
+}
+
+public enum WeaponType
+{
+    None,
+    Aim120,  // AIM-120 AMRAAM (active radar, BVR)
+    Aim9     // AIM-9 Sidewinder (IR, WVR)
 }
 
 /// <summary>
@@ -70,6 +79,29 @@ public class Aircraft : Entity
     public string? EntryLabel { get; set; }
     public Vec2? ObjectivePosition { get; set; }
 
+    // ── Friendly fighter support (CAP) ────────────────────────────────
+    public int Aim120Count { get; set; }           // AIM-120 AMRAAM (active radar)
+    public int Aim9Count { get; set; }             // AIM-9 Sidewinder (IR)
+    public bool IsWinchester => Aim120Count == 0 && Aim9Count == 0;
+    public string? PatrolSectorId { get; set; }    // Assigned patrol sector
+    public Vec2? PatrolSectorCenter { get; set; }  // Center point of patrol sector
+    public double PatrolSectorRadiusM { get; set; } // Patrol sector radius in meters
+    public string? InterceptTargetTrackId { get; set; } // Assigned intercept target
+    public bool IsOnStation { get; set; }          // Has arrived at patrol sector
+    public DateTime? OnStationTime { get; set; }   // When aircraft arrived on station
+    
+    // ── Radio communications ──────────────────────────────────────────
+    public CommManager? CommManager { get; set; }  // Radio communication manager
+    private bool _hasReportedOnStation;            // Track if on-station report sent
+    private string? _lastTallyTargetId;            // Track last target for which tally was reported
+    
+    // ── Weapon engagement constants ───────────────────────────────────
+    private const double Aim120MaxRangeNm = 30.0;  // AIM-120 max range ~30nm
+    private const double Aim120MinRangeNm = 3.0;   // AIM-120 min range ~3nm
+    private const double Aim9MaxRangeNm = 10.0;    // AIM-9 max range ~10nm
+    private const double Aim9MinRangeNm = 0.5;     // AIM-9 min range ~0.5nm
+    private const double BvrRangeThresholdNm = 12.0; // BVR/WVR transition ~12nm
+
     // ── Threat awareness (what the aircraft "knows") ──────────────────
     public bool RadarLockDetected { get; set; }    // RWR is screaming
     public double RadarLockBearingDeg { get; set; }
@@ -108,6 +140,7 @@ public class Aircraft : Entity
 
         if (IsOnRTB && CurrentBehavior != AircraftBehavior.EgressRetreat)
         {
+            GameSessionLogger.Current?.OnBehaviorChanged(Id, Designation, CurrentBehavior.ToString(), nameof(AircraftBehavior.EgressRetreat), "bingo_fuel");
             CurrentBehavior = AircraftBehavior.EgressRetreat;
             // Point away from battery
             RequestedHeadingDeg = (HeadingDeg + 180.0) % 360.0;
@@ -120,6 +153,18 @@ public class Aircraft : Entity
         {
             case AircraftBehavior.IngressAttack:
                 ExecuteIngress(deltaTime);
+                
+                // Strikers "attack" when reaching objective
+                if (Role == AircraftRole.Striker && ObjectivePosition.HasValue)
+                {
+                    double rangeToObjective = Position.DistanceTo(ObjectivePosition.Value);
+                    if (rangeToObjective < CoordinateSystem.NmToMeters(3))
+                    {
+                        GameSessionLogger.Current?.OnBehaviorChanged(Id, Designation, nameof(AircraftBehavior.IngressAttack), nameof(AircraftBehavior.EgressRetreat), "objective_reached");
+                        CurrentBehavior = AircraftBehavior.EgressRetreat;
+                        RequestedHeadingDeg = (HeadingDeg + 180.0) % 360.0;
+                    }
+                }
                 break;
 
             case AircraftBehavior.EgressRetreat:
@@ -164,6 +209,7 @@ public class Aircraft : Entity
                 double range = Position.Length;
                 if (range < CoordinateSystem.NmToMeters(25))
                 {
+                    GameSessionLogger.Current?.OnBehaviorChanged(Id, Designation, nameof(AircraftBehavior.Feint), nameof(AircraftBehavior.EgressRetreat), "feint_range");
                     CurrentBehavior = AircraftBehavior.EgressRetreat;
                     RequestedHeadingDeg = (HeadingDeg + 180.0) % 360.0;
                 }
@@ -199,9 +245,12 @@ public class Aircraft : Entity
         if (missileThreatHot)
         {
             if (CurrentBehavior != AircraftBehavior.EvasiveManeuver)
+            {
                 _behaviorBeforeThreatReaction = CurrentBehavior;
-
-            CurrentBehavior = AircraftBehavior.EvasiveManeuver;
+                GameSessionLogger.Current?.OnBehaviorChanged(Id, Designation, CurrentBehavior.ToString(), nameof(AircraftBehavior.EvasiveManeuver), "missile_inbound");
+                CurrentBehavior = AircraftBehavior.EvasiveManeuver;
+            }
+            
             _threatReactionUntilUtc = now.AddSeconds(5);
             return;
         }
@@ -211,7 +260,15 @@ public class Aircraft : Entity
             if (!IsThreatResponseBehavior(CurrentBehavior))
                 _behaviorBeforeThreatReaction = CurrentBehavior;
 
-            CurrentBehavior = ChooseRadarThreatBehavior();
+            var next = ChooseRadarThreatBehavior();
+            
+            // ONLY log if behavior actually changes
+            if (CurrentBehavior != next)
+            {
+                GameSessionLogger.Current?.OnBehaviorChanged(Id, Designation, CurrentBehavior.ToString(), next.ToString(), hardLockHot ? "hard_lock" : "radar_lock");
+                CurrentBehavior = next;
+            }
+            
             _threatReactionUntilUtc = now.AddSeconds(hardLockHot ? 7 : 5);
             return;
         }
@@ -221,6 +278,7 @@ public class Aircraft : Entity
             _threatReactionUntilUtc.HasValue &&
             now >= _threatReactionUntilUtc.Value)
         {
+            GameSessionLogger.Current?.OnBehaviorChanged(Id, Designation, CurrentBehavior.ToString(), _behaviorBeforeThreatReaction.Value.ToString(), "threat_clear");
             CurrentBehavior = _behaviorBeforeThreatReaction.Value;
             _behaviorBeforeThreatReaction = null;
             _threatReactionUntilUtc = null;
@@ -234,6 +292,7 @@ public class Aircraft : Entity
                  _threatReactionUntilUtc.HasValue &&
                  now >= _threatReactionUntilUtc.Value)
         {
+            GameSessionLogger.Current?.OnBehaviorChanged(Id, Designation, CurrentBehavior.ToString(), _behaviorBeforeThreatReaction.Value.ToString(), "threat_clear");
             CurrentBehavior = _behaviorBeforeThreatReaction.Value;
             _behaviorBeforeThreatReaction = null;
             _threatReactionUntilUtc = null;
@@ -334,8 +393,292 @@ public class Aircraft : Entity
 
     private void ExecuteOrbit(double deltaTime)
     {
-        // Simple orbit: constantly turn
-        RequestedHeadingDeg = (HeadingDeg + 2.0 * deltaTime + 360) % 360;
+        // CAP patrol behavior: orbit within assigned sector
+        if (PatrolSectorCenter.HasValue && PatrolSectorRadiusM > 0)
+        {
+            ExecuteCapPatrol(deltaTime);
+        }
+        else
+        {
+            // Simple orbit: constantly turn
+            RequestedHeadingDeg = (HeadingDeg + 2.0 * deltaTime + 360) % 360;
+        }
+    }
+
+    /// <summary>
+    /// Execute CAP patrol behavior within assigned sector.
+    /// Implements sector boundary enforcement and autonomous target detection.
+    /// </summary>
+    private void ExecuteCapPatrol(double deltaTime)
+    {
+        if (!PatrolSectorCenter.HasValue) return;
+
+        Vec2 sectorCenter = PatrolSectorCenter.Value;
+        double distanceToCenter = Position.DistanceTo(sectorCenter);
+        
+        // Check if on station (within sector)
+        if (!IsOnStation && distanceToCenter < PatrolSectorRadiusM)
+        {
+            IsOnStation = true;
+            OnStationTime = DateTime.UtcNow;
+            
+            // Send on-station arrival report
+            SendOnStationReport();
+        }
+
+        // If intercepting a target, skip normal patrol behavior
+        // Intercept course will be updated by external system (FriendlySupportDirector or command handler)
+        if (!string.IsNullOrEmpty(InterceptTargetTrackId))
+        {
+            // Intercept mode: maintain full speed and current heading
+            // Course updates are handled externally via SetInterceptCourse
+            RequestedSpeedMps = FlightModel.MaxSpeedMps;
+            return;
+        }
+
+        // Sector boundary enforcement: turn back if approaching edge
+        double boundaryThreshold = PatrolSectorRadiusM * 0.85; // Turn at 85% of radius
+        if (distanceToCenter > boundaryThreshold)
+        {
+            // Turn toward sector center
+            RequestedHeadingDeg = Position.HeadingTo(sectorCenter);
+            RequestedAltitudeM = CoordinateSystem.FtToM(25000); // Standard CAP altitude
+            RequestedSpeedMps = FlightModel.MaxSpeedMps * 0.75; // Cruise speed
+        }
+        else
+        {
+            // Normal patrol: fly racetrack pattern
+            // Simple implementation: orbit around sector center
+            Vec2 toCenter = sectorCenter - Position;
+            double bearingToCenter = Position.HeadingTo(sectorCenter);
+            
+            // Fly perpendicular to radius vector for circular patrol
+            RequestedHeadingDeg = NormalizeHeading(bearingToCenter + 90);
+            RequestedAltitudeM = CoordinateSystem.FtToM(25000);
+            RequestedSpeedMps = FlightModel.MaxSpeedMps * 0.75;
+        }
+    }
+
+    /// <summary>
+    /// Set intercept target and transition to intercept behavior.
+    /// Requirement 3.1: WHEN a player issues an intercept command, THE CAP_Fighter SHALL change behavior to intercept.
+    /// </summary>
+    public void SetInterceptTarget(string targetTrackId)
+    {
+        if (string.IsNullOrEmpty(targetTrackId))
+            return;
+
+        InterceptTargetTrackId = targetTrackId;
+        
+        // Reset tally report for new target
+        ResetTallyReport();
+        
+        // Send Wilco acknowledgment
+        SendWilcoAcknowledgment($"intercepting {targetTrackId}");
+    }
+
+    /// <summary>
+    /// Calculate and set intercept course toward a target track.
+    /// Implements lead pursuit for optimal intercept geometry.
+    /// Requirement 3.3: THE CAP_Fighter SHALL calculate an intercept course to the target Track.
+    /// </summary>
+    public void SetInterceptCourse(Vec2 targetPosition, Vec2 targetVelocity)
+    {
+        // Calculate intercept point using proportional navigation
+        Vec2 relativePosition = targetPosition - Position;
+        double timeToIntercept = CalculateInterceptTime(relativePosition, targetVelocity, FlightModel.MaxSpeedMps);
+        
+        if (timeToIntercept > 0)
+        {
+            // Lead the target
+            Vec2 interceptPoint = targetPosition + targetVelocity * timeToIntercept;
+            RequestedHeadingDeg = Position.HeadingTo(interceptPoint);
+            RequestedAltitudeM = CoordinateSystem.FtToM(25000); // Match typical engagement altitude
+            RequestedSpeedMps = FlightModel.MaxSpeedMps; // Full speed for intercept
+        }
+        else
+        {
+            // Direct pursuit if intercept calculation fails
+            RequestedHeadingDeg = Position.HeadingTo(targetPosition);
+            RequestedSpeedMps = FlightModel.MaxSpeedMps;
+        }
+    }
+
+    /// <summary>
+    /// Clear intercept target and resume patrol behavior.
+    /// Requirement 3.5: IF the target Track is destroyed, THEN THE CAP_Fighter SHALL resume patrol.
+    /// </summary>
+    public void ResumePatrol()
+    {
+        InterceptTargetTrackId = null;
+        ResetTallyReport();
+        
+        if (CurrentBehavior != AircraftBehavior.OrbitPatrol)
+        {
+            CurrentBehavior = AircraftBehavior.OrbitPatrol;
+        }
+    }
+
+    /// <summary>
+    /// Calculate time to intercept using relative velocity.
+    /// Returns -1 if intercept is not possible (target moving away faster than we can chase).
+    /// </summary>
+    private double CalculateInterceptTime(Vec2 relativePosition, Vec2 targetVelocity, double interceptorSpeed)
+    {
+        // Solve for time when |relativePosition + targetVelocity * t - interceptorVelocity * t| = 0
+        // Simplified: assume we fly directly toward intercept point
+        double range = relativePosition.Length;
+        double targetSpeed = targetVelocity.Length;
+        
+        // Law of cosines approach for intercept
+        // This is a simplified calculation; full solution requires solving quadratic equation
+        double closingSpeed = interceptorSpeed - targetSpeed * 0.5; // Approximate
+        
+        if (closingSpeed <= 0) return -1; // Can't catch target
+        
+        return range / closingSpeed;
+    }
+
+    /// <summary>
+    /// Check if a position is within the assigned patrol sector.
+    /// </summary>
+    public bool IsPositionInSector(Vec2 position)
+    {
+        if (!PatrolSectorCenter.HasValue || PatrolSectorRadiusM <= 0)
+            return false;
+        
+        return position.DistanceTo(PatrolSectorCenter.Value) <= PatrolSectorRadiusM;
+    }
+
+    /// <summary>
+    /// Detect hostile tracks within patrol sector and engagement range.
+    /// Returns true if a valid target is detected within sector.
+    /// </summary>
+    public bool DetectHostileInSector(IEnumerable<Entity> hostileEntities, out Entity? detectedTarget)
+    {
+        detectedTarget = null;
+        
+        if (!PatrolSectorCenter.HasValue || PatrolSectorRadiusM <= 0)
+            return false;
+
+        double detectionRangeM = CoordinateSystem.NmToMeters(40); // F-16 radar range ~40nm
+        
+        foreach (var hostile in hostileEntities)
+        {
+            if (!hostile.IsActive) continue;
+            
+            double rangeToTarget = Position.DistanceTo(hostile.Position);
+            bool inDetectionRange = rangeToTarget <= detectionRangeM;
+            bool inSector = IsPositionInSector(hostile.Position);
+            
+            if (inDetectionRange && inSector)
+            {
+                detectedTarget = hostile;
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    // ── Weapon Engagement Logic (Task 1.3) ───────────────────────────
+
+    /// <summary>
+    /// Select appropriate weapon for target based on range.
+    /// Returns weapon type and whether engagement is possible.
+    /// </summary>
+    public (WeaponType weapon, bool canEngage) SelectWeaponForTarget(double rangeToTargetNm)
+    {
+        // Check if Winchester
+        if (IsWinchester)
+            return (WeaponType.None, false);
+
+        // BVR engagement: use AIM-120 if available and in range
+        if (rangeToTargetNm >= BvrRangeThresholdNm)
+        {
+            if (Aim120Count > 0 && IsInAim120Range(rangeToTargetNm))
+                return (WeaponType.Aim120, true);
+            
+            return (WeaponType.None, false);
+        }
+
+        // WVR engagement: prefer AIM-9 if available and in range
+        if (Aim9Count > 0 && IsInAim9Range(rangeToTargetNm))
+            return (WeaponType.Aim9, true);
+
+        // Fallback to AIM-120 if AIM-9 not available but AIM-120 is in range
+        if (Aim120Count > 0 && IsInAim120Range(rangeToTargetNm))
+            return (WeaponType.Aim120, true);
+
+        return (WeaponType.None, false);
+    }
+
+    /// <summary>
+    /// Check if target is within AIM-120 engagement range.
+    /// </summary>
+    public bool IsInAim120Range(double rangeToTargetNm)
+    {
+        return rangeToTargetNm >= Aim120MinRangeNm && rangeToTargetNm <= Aim120MaxRangeNm;
+    }
+
+    /// <summary>
+    /// Check if target is within AIM-9 engagement range.
+    /// </summary>
+    public bool IsInAim9Range(double rangeToTargetNm)
+    {
+        return rangeToTargetNm >= Aim9MinRangeNm && rangeToTargetNm <= Aim9MaxRangeNm;
+    }
+
+    /// <summary>
+    /// Check if target is within any weapon engagement range.
+    /// </summary>
+    public bool IsTargetInWeaponRange(double rangeToTargetNm)
+    {
+        if (Aim120Count > 0 && IsInAim120Range(rangeToTargetNm))
+            return true;
+        
+        if (Aim9Count > 0 && IsInAim9Range(rangeToTargetNm))
+            return true;
+
+        return false;
+    }
+
+    /// <summary>
+    /// Expend a weapon of the specified type.
+    /// Returns true if weapon was available and expended.
+    /// </summary>
+    public bool ExpendWeapon(WeaponType weaponType)
+    {
+        switch (weaponType)
+        {
+            case WeaponType.Aim120:
+                if (Aim120Count > 0)
+                {
+                    Aim120Count--;
+                    return true;
+                }
+                return false;
+
+            case WeaponType.Aim9:
+                if (Aim9Count > 0)
+                {
+                    Aim9Count--;
+                    return true;
+                }
+                return false;
+
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Check if fighter should RTB due to Winchester condition.
+    /// Returns true if Winchester and should return to base.
+    /// </summary>
+    public bool ShouldRtbDueToWinchester()
+    {
+        return IsWinchester && CurrentBehavior != AircraftBehavior.EgressRetreat;
     }
 
     private void ExecuteEcmStandoff()
@@ -379,6 +722,7 @@ public class Aircraft : Entity
 
         if (rangeNm <= 16)
         {
+            GameSessionLogger.Current?.OnBehaviorChanged(Id, Designation, nameof(AircraftBehavior.SEAD), nameof(AircraftBehavior.EgressRetreat), "sead_min_range");
             CurrentBehavior = AircraftBehavior.EgressRetreat;
             RequestedHeadingDeg = NormalizeHeading(HeadingDeg + 180);
             return;
@@ -430,6 +774,252 @@ public class Aircraft : Entity
     private Vec2 ResolveMissionAnchor() => ObjectivePosition ?? TargetWaypoint ?? Vec2.Zero;
 
     private static double NormalizeHeading(double headingDeg) => (headingDeg % 360 + 360) % 360;
+
+    // ── Radio Communication Methods (Task 3.1) ────────────────────────
+
+    /// <summary>
+    /// Send Wilco (will comply) acknowledgment when receiving tasking order.
+    /// Requirement 2.1: WHEN a CAP_Fighter receives a tasking order, THE CAP_Fighter SHALL acknowledge with a Wilco message.
+    /// </summary>
+    public void SendWilcoAcknowledgment(string taskDescription)
+    {
+        if (CommManager == null || string.IsNullOrEmpty(CallSign)) return;
+
+        var speaker = RadioRules.CreateFriendlySupportProfile(
+            CallSign,
+            "CAP FIGHTER",
+            CallSign,
+            Designation);
+
+        var message = CommManager.CreateMessage(
+            speaker,
+            RadioChannel.CommandNet,
+            $"WILCO, {taskDescription}",
+            MessagePriority.Routine,
+            MessageType.StatusReport,
+            recipient: "ALPHA ACTUAL",
+            canReply: false,
+            staticLevel: 0.15);
+
+        CommManager.Queue(message);
+    }
+
+    /// <summary>
+    /// Send on-station arrival report when entering patrol sector.
+    /// Requirement 2.7: WHEN a CAP_Fighter arrives on station, THE CAP_Fighter SHALL report on-station with sector designation.
+    /// </summary>
+    private void SendOnStationReport()
+    {
+        if (CommManager == null || string.IsNullOrEmpty(CallSign) || _hasReportedOnStation) return;
+        if (string.IsNullOrEmpty(PatrolSectorId)) return;
+
+        _hasReportedOnStation = true;
+
+        var speaker = RadioRules.CreateFriendlySupportProfile(
+            CallSign,
+            "CAP FIGHTER",
+            CallSign,
+            Designation);
+
+        var message = CommManager.CreateMessage(
+            speaker,
+            RadioChannel.CommandNet,
+            $"{CallSign} on station, {PatrolSectorId}, ready for tasking",
+            MessagePriority.Routine,
+            MessageType.StatusReport,
+            recipient: "ALPHA ACTUAL",
+            canReply: false,
+            staticLevel: 0.15);
+
+        CommManager.Queue(message);
+    }
+
+    /// <summary>
+    /// Send Tally report when achieving visual/radar contact with target.
+    /// Requirement 2.2: WHEN a CAP_Fighter achieves Tally on a target, THE CAP_Fighter SHALL report visual contact via radio.
+    /// </summary>
+    public void SendTallyReport(string targetTrackId)
+    {
+        if (CommManager == null || string.IsNullOrEmpty(CallSign)) return;
+        if (string.IsNullOrEmpty(targetTrackId)) return;
+
+        // Only send tally once per target
+        if (_lastTallyTargetId == targetTrackId) return;
+        _lastTallyTargetId = targetTrackId;
+
+        var speaker = RadioRules.CreateFriendlySupportProfile(
+            CallSign,
+            "CAP FIGHTER",
+            CallSign,
+            Designation);
+
+        var message = CommManager.CreateMessage(
+            speaker,
+            RadioChannel.CommandNet,
+            $"TALLY, {targetTrackId}, engaging",
+            MessagePriority.Priority,
+            MessageType.StatusReport,
+            recipient: "ALPHA ACTUAL",
+            canReply: false,
+            staticLevel: 0.15);
+
+        CommManager.Queue(message);
+    }
+
+    /// <summary>
+    /// Reset tally report flag when target changes or is lost.
+    /// Allows sending new tally report for different targets.
+    /// </summary>
+    public void ResetTallyReport()
+    {
+        _lastTallyTargetId = null;
+    }
+
+    // ── Engagement Radio Communications (Task 3.2) ────────────────────
+
+    /// <summary>
+    /// Send Fox-3 launch report with target track number.
+    /// Requirement 2.3: WHEN a CAP_Fighter launches a weapon, THE CAP_Fighter SHALL report Fox-3 with target track number.
+    /// </summary>
+    public void SendFox3Report(string targetTrackId, WeaponType weaponType)
+    {
+        if (CommManager == null || string.IsNullOrEmpty(CallSign)) return;
+        if (string.IsNullOrEmpty(targetTrackId)) return;
+
+        string weaponCall = weaponType switch
+        {
+            WeaponType.Aim120 => "FOX-3",
+            WeaponType.Aim9 => "FOX-2",
+            _ => "WEAPON AWAY"
+        };
+
+        var speaker = RadioRules.CreateFriendlySupportProfile(
+            CallSign,
+            "CAP FIGHTER",
+            CallSign,
+            Designation);
+
+        var message = CommManager.CreateMessage(
+            speaker,
+            RadioChannel.CommandNet,
+            $"{weaponCall}, {targetTrackId}",
+            MessagePriority.Priority,
+            MessageType.StatusReport,
+            recipient: "ALPHA ACTUAL",
+            canReply: false,
+            staticLevel: 0.15);
+
+        CommManager.Queue(message);
+    }
+
+    /// <summary>
+    /// Send Splash report on target destruction.
+    /// Requirement 2.4: WHEN a CAP_Fighter destroys a target, THE CAP_Fighter SHALL report Splash with target track number.
+    /// </summary>
+    public void SendSplashReport(string targetTrackId)
+    {
+        if (CommManager == null || string.IsNullOrEmpty(CallSign)) return;
+        if (string.IsNullOrEmpty(targetTrackId)) return;
+
+        var speaker = RadioRules.CreateFriendlySupportProfile(
+            CallSign,
+            "CAP FIGHTER",
+            CallSign,
+            Designation);
+
+        var message = CommManager.CreateMessage(
+            speaker,
+            RadioChannel.CommandNet,
+            $"SPLASH, {targetTrackId}, target destroyed",
+            MessagePriority.Priority,
+            MessageType.StatusReport,
+            recipient: "ALPHA ACTUAL",
+            canReply: false,
+            staticLevel: 0.15);
+
+        CommManager.Queue(message);
+    }
+
+    /// <summary>
+    /// Send Bingo fuel report and RTB notification.
+    /// Requirement 2.5: WHEN a CAP_Fighter reaches Bingo_Fuel, THE CAP_Fighter SHALL report fuel state and RTB intent.
+    /// </summary>
+    public void SendBingoFuelReport()
+    {
+        if (CommManager == null || string.IsNullOrEmpty(CallSign)) return;
+
+        var speaker = RadioRules.CreateFriendlySupportProfile(
+            CallSign,
+            "CAP FIGHTER",
+            CallSign,
+            Designation);
+
+        var message = CommManager.CreateMessage(
+            speaker,
+            RadioChannel.CommandNet,
+            $"{CallSign} BINGO fuel, RTB",
+            MessagePriority.Priority,
+            MessageType.StatusReport,
+            recipient: "ALPHA ACTUAL",
+            canReply: false,
+            staticLevel: 0.15);
+
+        CommManager.Queue(message);
+    }
+
+    /// <summary>
+    /// Send Winchester report and RTB notification.
+    /// Requirement 2.6: WHEN a CAP_Fighter reaches Winchester, THE CAP_Fighter SHALL report weapons state and RTB intent.
+    /// </summary>
+    public void SendWinchesterReport()
+    {
+        if (CommManager == null || string.IsNullOrEmpty(CallSign)) return;
+
+        var speaker = RadioRules.CreateFriendlySupportProfile(
+            CallSign,
+            "CAP FIGHTER",
+            CallSign,
+            Designation);
+
+        var message = CommManager.CreateMessage(
+            speaker,
+            RadioChannel.CommandNet,
+            $"{CallSign} WINCHESTER, RTB",
+            MessagePriority.Priority,
+            MessageType.StatusReport,
+            recipient: "ALPHA ACTUAL",
+            canReply: false,
+            staticLevel: 0.15);
+
+        CommManager.Queue(message);
+    }
+
+    /// <summary>
+    /// Send Defensive report when under threat.
+    /// Requirement 2.8: IF a CAP_Fighter is under threat, THEN THE CAP_Fighter SHALL report Defensive status.
+    /// </summary>
+    public void SendDefensiveReport()
+    {
+        if (CommManager == null || string.IsNullOrEmpty(CallSign)) return;
+
+        var speaker = RadioRules.CreateFriendlySupportProfile(
+            CallSign,
+            "CAP FIGHTER",
+            CallSign,
+            Designation);
+
+        var message = CommManager.CreateMessage(
+            speaker,
+            RadioChannel.CommandNet,
+            $"{CallSign} DEFENSIVE, engaged",
+            MessagePriority.Flash,
+            MessageType.StatusReport,
+            recipient: "ALPHA ACTUAL",
+            canReply: false,
+            staticLevel: 0.15);
+
+        CommManager.Queue(message);
+    }
 
     // ── Static factory methods ────────────────────────────────────────
 

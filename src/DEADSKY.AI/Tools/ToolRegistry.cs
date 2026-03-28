@@ -305,6 +305,206 @@ public class ToolRegistry
             new[] { ("last_n", "optional: last N engagements") },
             Array.Empty<string>(),
             GetEngagementHistory);
+
+        // FRIENDLY FIGHTER TASKING
+        Register("task_cap_intercept",
+            "Task a CAP fighter to intercept a hostile track. The fighter will acknowledge with Wilco and proceed to intercept.",
+            new[]
+            {
+                ("cap_callsign", "required: CAP fighter callsign e.g. VIPER 1-1"),
+                ("target_track_id", "required: target track ID e.g. TRK-0023")
+            },
+            new[] { "cap_callsign", "target_track_id" },
+            TaskCapIntercept);
+
+        Register("request_aircraft_launch",
+            "Order an airbase to scramble fighters for a specific mission/role.",
+            new[]
+            {
+                ("airbase_id", "required: callsign or ID of the airbase e.g. ALPHA"),
+                ("role", "required: fighter|bomber|sead"),
+                ("count", "required: number of aircraft to launch (1-4)"),
+                ("mission", "optional: purpose of the launch e.g. CAP, Intercept")
+            },
+            new[] { "airbase_id", "role", "count" },
+            RequestAircraftLaunch);
+
+        Register("get_airbase_status",
+            "Get the resource status (fighters, fuel, missiles) of all friendly airbases.",
+            Array.Empty<(string, string)>(),
+            Array.Empty<string>(),
+            GetAirbaseStatus);
+
+        // Phase 4: SAM Battery Coordination Tools
+        Register("task_battery_engage",
+            "Order a SAM battery to engage a specific hostile track.",
+            new[] {
+                ("battery_callsign", "required: battery callsign e.g. BRAVO"),
+                ("track_id", "required: target track ID e.g. TRK-0023"),
+                ("missile_count", "optional: number of missiles to fire (default 1)")
+            },
+            new[] { "battery_callsign", "track_id" },
+            TaskBatteryEngage);
+
+        Register("task_battery_hold_fire",
+            "Order a SAM battery to hold fire and only track targets.",
+            new[] {
+                ("battery_callsign", "required: battery callsign e.g. BRAVO")
+            },
+            new[] { "battery_callsign" },
+            TaskBatteryHoldFire);
+
+        Register("get_battery_network_status",
+            "Get the status of all SAM batteries in the defense network.",
+            Array.Empty<(string, string)>(),
+            Array.Empty<string>(),
+            GetBatteryNetworkStatus);
+    }
+
+    // ── Tool implementations ──────────────────────────────────────────
+
+    private Task<string> RequestAircraftLaunch(ToolCall call)
+    {
+        var airbaseId = call.GetString("airbase_id");
+        var roleStr = call.GetString("role", "fighter").ToLowerInvariant();
+        int count = call.GetInt("count", 1);
+        count = Math.Clamp(count, 1, 4);
+
+        AircraftRole role = roleStr switch
+        {
+            "bomber" => AircraftRole.Striker,
+            "sead" => AircraftRole.SEAD,
+            _ => AircraftRole.Fighter
+        };
+
+        var result = _sim.Airbases.RequestScramble(airbaseId, role, count);
+        
+        if (result.Accepted)
+            return Task.FromResult($"{{\"status\":\"accepted\",\"wait_time_sec\":{result.WaitTimeSec:F0},\"message\":\"{result.Reason}\"}}");
+        else
+            return Task.FromResult($"{{\"status\":\"denied\",\"error\":\"{result.Reason}\"}}");
+    }
+
+    private Task<string> GetAirbaseStatus(ToolCall call)
+    {
+        var airbases = _sim.Entities.GetByType<Airbase>();
+        if (!airbases.Any()) return Task.FromResult($"{{\"error\":\"No active friendly airbases in theater.\"}}");
+
+        var status = airbases.Select(ab => new
+        {
+            id = ab.Id,
+            callsign = ab.CallSign,
+            designation = ab.Designation,
+            fighters_available = ab.FightersAvailable,
+            fuel_kg = ab.FuelAvailableKg,
+            aam_available = ab.AamAvailable,
+            status = ab.Status.ToString()
+        });
+
+        return Task.FromResult(JsonSerializer.Serialize(new { airbases = status }));
+    }
+
+    // ── Phase 4: Battery coordination tool implementations ─────────────
+
+    private Task<string> TaskBatteryEngage(ToolCall call)
+    {
+        var batteryCallsign = call.GetString("battery_callsign");
+        var trackId = call.GetString("track_id");
+        int missileCount = call.GetInt("missile_count", 1);
+
+        var batteries = _sim.Entities.GetByType<SAMBattery>();
+        var battery = batteries.FirstOrDefault(b => 
+            b.Callsign.Equals(batteryCallsign, StringComparison.OrdinalIgnoreCase));
+
+        if (battery == null)
+            return Task.FromResult($"{{\"status\":\"error\",\"message\":\"Battery {batteryCallsign} not found.\"}}");
+
+        if (battery.IsInSilentMode)
+            return Task.FromResult($"{{\"status\":\"error\",\"message\":\"Battery {batteryCallsign} is in SILENT MODE. Cannot engage.\"}}");
+
+        if (!battery.CanEngage(50, 20000)) // Simplified range check
+            return Task.FromResult($"{{\"status\":\"error\",\"message\":\"Battery {batteryCallsign} cannot engage - no ready launchers or out of range.\"}}");
+
+        // Assign target to battery
+        battery.AssignedEngagementTrackId = trackId;
+        battery.IsInTrackOnlyMode = false;
+
+        // Radio confirmation
+        var speaker = RadioRules.CreateFriendlySupportProfile("BATTERY NETWORK", "COORDINATOR", battery.Callsign, "SAM BATTERY");
+        _sim.Comms.Queue(CommManager.CreateMessage(
+            speaker,
+            RadioChannel.AirDefenseNet,
+            $"{battery.Callsign} engaging {trackId} with {missileCount} missile(s).",
+            MessagePriority.Immediate,
+            MessageType.StatusReport,
+            recipient: "ALL BATTERIES",
+            canReply: false,
+            staticLevel: 0.1));
+
+        return Task.FromResult($"{{\"status\":\"accepted\",\"battery\":\"{battery.Callsign}\",\"target\":\"{trackId}\",\"missiles\":{missileCount}}}");
+    }
+
+    private Task<string> TaskBatteryHoldFire(ToolCall call)
+    {
+        var batteryCallsign = call.GetString("battery_callsign");
+
+        var batteries = _sim.Entities.GetByType<SAMBattery>();
+        var battery = batteries.FirstOrDefault(b => 
+            b.Callsign.Equals(batteryCallsign, StringComparison.OrdinalIgnoreCase));
+
+        if (battery == null)
+            return Task.FromResult($"{{\"status\":\"error\",\"message\":\"Battery {batteryCallsign} not found.\"}}");
+
+        battery.IsInTrackOnlyMode = true;
+        battery.AssignedEngagementTrackId = null;
+
+        var speaker = RadioRules.CreateFriendlySupportProfile("BATTERY NETWORK", "COORDINATOR", battery.Callsign, "SAM BATTERY");
+        _sim.Comms.Queue(CommManager.CreateMessage(
+            speaker,
+            RadioChannel.AirDefenseNet,
+            $"{battery.Callsign} holding fire. Tracking only.",
+            MessagePriority.Priority,
+            MessageType.StatusReport,
+            recipient: "ALL BATTERIES",
+            canReply: false,
+            staticLevel: 0.1));
+
+        return Task.FromResult($"{{\"status\":\"accepted\",\"battery\":\"{battery.Callsign}\",\"mode\":\"track_only\"}}");
+    }
+
+    private Task<string> GetBatteryNetworkStatus(ToolCall call)
+    {
+        var batteries = _sim.Entities.GetByType<SAMBattery>();
+        if (!batteries.Any())
+            return Task.FromResult($"{{\"error\":\"No active SAM batteries in theater.\"}}");
+
+        var coordinator = batteries.FirstOrDefault(b => b.IsNetworkCoordinator);
+        var status = batteries.Select(b => new
+        {
+            id = b.Id,
+            callsign = b.Callsign,
+            is_coordinator = b.IsNetworkCoordinator,
+            radar_online = b.RadarOnline,
+            radar_mode = b.RadarMode.ToString(),
+            ready_launchers = b.ReadyLaunchers,
+            reserve_missiles = b.ReserveMissiles,
+            is_silent = b.IsInSilentMode,
+            arm_threat = b.IsBeingTargetedByARM,
+            assigned_target = b.AssignedEngagementTrackId,
+            track_only_mode = b.IsInTrackOnlyMode,
+            radar_health = Math.Round(b.RadarHealthPct, 2)
+        });
+
+        return Task.FromResult(JsonSerializer.Serialize(new
+        {
+            network_status = _sim.Batteries.GetNetworkStatus(),
+            coordinator = coordinator?.Callsign ?? "NONE",
+            total_batteries = batteries.Count,
+            active_batteries = batteries.Count(b => b.Status == EntityStatus.Active),
+            silent_batteries = batteries.Count(b => b.IsInSilentMode),
+            arm_threats = batteries.Count(b => b.IsBeingTargetedByARM),
+            batteries = status
+        }));
     }
 
     private void Register(
@@ -969,6 +1169,52 @@ public class ToolRegistry
                 notes = e.Notes
             });
         return Task.FromResult(JsonSerializer.Serialize(new { engagements = history }));
+    }
+
+    private Task<string> TaskCapIntercept(ToolCall call)
+    {
+        var capCallsign = call.GetString("cap_callsign");
+        var targetTrackId = call.GetString("target_track_id");
+
+        // Validate CAP fighter exists and is active
+        var friendlyAircraft = _sim.Entities.GetByAffiliation(Affiliation.Friendly)
+            .OfType<Aircraft>()
+            .Where(a => a.IsActive && a.Role == AircraftRole.Fighter)
+            .ToList();
+
+        var capFighter = friendlyAircraft.FirstOrDefault(a =>
+            a.CallSign?.Equals(capCallsign, StringComparison.OrdinalIgnoreCase) == true);
+
+        if (capFighter == null)
+        {
+            return Task.FromResult(JsonSerializer.Serialize(new
+            {
+                success = false,
+                reason = $"CAP fighter {capCallsign} not found or not active"
+            }));
+        }
+
+        // Validate target track exists
+        var targetTrack = _sim.Radar.TrackManager.GetById(targetTrackId);
+        if (targetTrack == null)
+        {
+            return Task.FromResult(JsonSerializer.Serialize(new
+            {
+                success = false,
+                reason = $"Target track {targetTrackId} not found"
+            }));
+        }
+
+        // Execute intercept order
+        capFighter.SetInterceptTarget(targetTrackId);
+
+        return Task.FromResult(JsonSerializer.Serialize(new
+        {
+            success = true,
+            cap_callsign = capCallsign,
+            target_track_id = targetTrackId,
+            message = $"{capCallsign} tasked to intercept {targetTrackId}"
+        }));
     }
 
     private static FriendlySupportType ParseSupportType(string supportType) => supportType.ToLowerInvariant() switch

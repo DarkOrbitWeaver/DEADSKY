@@ -1,0 +1,55 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  DEADSKY.Core -> C:\DarkOrbitWeaver\DEADSKY\src\DEADSKY.Core\bin\Debug\net9.0\DEADSKY.Core.dll
+  DEADSKY.AI -> C:\DarkOrbitWeaver\DEADSKY\src\DEADSKY.AI\bin\Debug\net9.0\DEADSKY.AI.dll
+  DEADSKY.Backend.Tests -> C:\DarkOrbitWeaver\DEADSKY\tests\DEADSKY.Backend.Tests\bin\Debug\net9.0\DEADSKY.Backend.Tests.dll
+Test run for C:\DarkOrbitWeaver\DEADSKY\tests\DEADSKY.Backend.Tests\bin\Debug\net9.0\DEADSKY.Backend.Tests.dll (.NETCoreApp,Version=v9.0)
+VSTest version 17.14.1 (x64)
+
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:00.12]     DEADSKY.Backend.Tests.StructuredOutputTests.Test_StructuredOutputWithToolCalling_ReturnsValidJSON [SKIP]
+[xUnit.net 00:00:00.12]     DEADSKY.Backend.Tests.StructuredOutputTests.Test_BasicStructuredOutput_ReturnsValidJSON [SKIP]
+  Skipped DEADSKY.Backend.Tests.StructuredOutputTests.Test_StructuredOutputWithToolCalling_ReturnsValidJSON [1 ms]
+  Skipped DEADSKY.Backend.Tests.StructuredOutputTests.Test_BasicStructuredOutput_ReturnsValidJSON [1 ms]
+[xUnit.net 00:00:00.15]     DEADSKY.Backend.Tests.LMStudioComplianceTests.Test_ToolCalling_ProperFormat_ReturnsToolCalls [SKIP]
+  Skipped DEADSKY.Backend.Tests.LMStudioComplianceTests.Test_ToolCalling_ProperFormat_ReturnsToolCalls [1 ms]
+[xUnit.net 00:00:00.15]     DEADSKY.Backend.Tests.LMStudioComplianceTests.Test_StructuredOutput_StrictMode_ReturnsValidJSON [SKIP]
+  Skipped DEADSKY.Backend.Tests.LMStudioComplianceTests.Test_StructuredOutput_StrictMode_ReturnsValidJSON [1 ms]
+[xUnit.net 00:00:00.15]     DEADSKY.Backend.Tests.LMStudioComplianceTests.Test_AIModelClient_StructuredOutput_EndToEnd [SKIP]
+  Skipped DEADSKY.Backend.Tests.LMStudioComplianceTests.Test_AIModelClient_StructuredOutput_EndToEnd [1 ms]
+[xUnit.net 00:00:00.16]     DEADSKY.Backend.Tests.StructuredOutputIntegrationTests.Test_StrictMode_GuaranteesSchemaCompliance [SKIP]
+[xUnit.net 00:00:00.16]     DEADSKY.Backend.Tests.StructuredOutputIntegrationTests.Test_RawStructuredOutput_VerifyResponseFormat [SKIP]
+[xUnit.net 00:00:00.16]     DEADSKY.Backend.Tests.StructuredOutputIntegrationTests.Test_StructuredOutput_WithStrictMode_AlwaysReturnsValidJSON [SKIP]
+  Skipped DEADSKY.Backend.Tests.StructuredOutputIntegrationTests.Test_StrictMode_GuaranteesSchemaCompliance [1 ms]
+  Skipped DEADSKY.Backend.Tests.StructuredOutputIntegrationTests.Test_RawStructuredOutput_VerifyResponseFormat [1 ms]
+  Skipped DEADSKY.Backend.Tests.StructuredOutputIntegrationTests.Test_StructuredOutput_WithStrictMode_AlwaysReturnsValidJSON [1 ms]
+[xUnit.net 00:00:00.20]     DEADSKY.Backend.Tests.AgentStructuredReplyTests.EnemyCommander_Tick_ExecutesToolPlan_WithoutFollowUpReplyRequest [FAIL]
+[xUnit.net 00:00:00.20]     DEADSKY.Backend.Tests.AIModelClientTests.GetTextAsync_RetriesStructuredOutput_WhenFirstPayloadIsEmpty [FAIL]
+[xUnit.net 00:00:00.20]     DEADSKY.Backend.Tests.AgentStructuredReplyTests.OnNewContactDetected_UsesInfoToolsAndQueuesStructuredIntelReply [FAIL]
+  Failed DEADSKY.Backend.Tests.AgentStructuredReplyTests.EnemyCommander_Tick_ExecutesToolPlan_WithoutFollowUpReplyRequest [3 ms]
+  Error Message:
+   Assert.Equal() Failure: Values differ
+Expected: 96
+Actual:   512
+  Stack Trace:
+     at DEADSKY.Backend.Tests.AgentStructuredReplyTests.EnemyCommander_Tick_ExecutesToolPlan_WithoutFollowUpReplyRequest() in C:\DarkOrbitWeaver\DEADSKY\tests\DEADSKY.Backend.Tests\AgentStructuredReplyTests.cs:line 139
+--- End of stack trace from previous location ---
+  Failed DEADSKY.Backend.Tests.AIModelClientTests.GetTextAsync_RetriesStructuredOutput_WhenFirstPayloadIsEmpty [1 ms]
+  Error Message:
+   Assert.Equal() Failure: Values differ
+Expected: 216
+Actual:   256
+  Stack Trace:
+     at DEADSKY.Backend.Tests.AIModelClientTests.GetTextAsync_RetriesStructuredOutput_WhenFirstPayloadIsEmpty() in C:\DarkOrbitWeaver\DEADSKY\tests\DEADSKY.Backend.Tests\AIModelClientTests.cs:line 174
+--- End of stack trace from previous location ---
+  Failed DEADSKY.Backend.Tests.AgentStructuredReplyTests.OnNewContactDetected_UsesInfoToolsAndQueuesStructuredIntelReply [1 ms]
+  Error Message:
+   Assert.Equal() Failure: Values differ
+Expected: 56
+Actual:   512
+  Stack Trace:
+     at DEADSKY.Backend.Tests.AgentStructuredReplyTests.OnNewContactDetected_UsesInfoToolsAndQueuesStructuredIntelReply() in C:\DarkOrbitWeaver\DEADSKY\tests\DEADSKY.Backend.Tests\AgentStructuredReplyTests.cs:line 78
+--- End of stack trace from previous location ---
+
+Failed!  - Failed:     3, Passed:   300, Skipped:     8, Total:   311, Duration: 169 ms - DEADSKY.Backend.Tests.dll (net9.0)

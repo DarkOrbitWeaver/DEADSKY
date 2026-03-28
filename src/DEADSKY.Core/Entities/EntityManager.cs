@@ -226,4 +226,70 @@ public class EntityManager
         Add(missile);
         return missile;
     }
+
+    /// <summary>
+    /// Spawn a friendly CAP fighter at patrol sector entry point.
+    /// Implements Requirement 1.1 from real-support-entities spec.
+    /// </summary>
+    /// <param name="callsign">Fighter callsign (e.g., "VIPER-1")</param>
+    /// <param name="sectorId">Patrol sector identifier</param>
+    /// <param name="sectorCenter">Center point of patrol sector</param>
+    /// <param name="sectorRadiusNm">Patrol sector radius in nautical miles</param>
+    /// <param name="aim120Count">Number of AIM-120 missiles (default 4)</param>
+    /// <param name="aim9Count">Number of AIM-9 missiles (default 2)</param>
+    /// <returns>The spawned friendly fighter aircraft</returns>
+    public Aircraft SpawnFriendlyFighter(
+        string callsign,
+        string sectorId,
+        Vec2 sectorCenter,
+        double sectorRadiusNm,
+        int aim120Count = 4,
+        int aim9Count = 2)
+    {
+        // Create F-16 fighter with friendly affiliation (Role is set in factory)
+        var fighter = Aircraft.CreateFromType("F-16", Affiliation.Friendly);
+        fighter.CallSign = callsign;
+
+        // Set patrol sector assignment
+        fighter.PatrolSectorId = sectorId;
+        fighter.PatrolSectorCenter = sectorCenter;
+        fighter.PatrolSectorRadiusM = CoordinateSystem.NmToMeters(sectorRadiusNm);
+
+        // Set initial position at patrol sector entry point (edge of sector)
+        // Position fighter at bearing 0 (north) from sector center at sector radius
+        double entryBearingDeg = 0.0; // North entry point
+        Vec2 entryOffset = new Vec2(
+            Math.Sin(entryBearingDeg * Math.PI / 180.0) * fighter.PatrolSectorRadiusM,
+            Math.Cos(entryBearingDeg * Math.PI / 180.0) * fighter.PatrolSectorRadiusM
+        );
+        fighter.Position = sectorCenter + entryOffset;
+
+        // Set initial heading toward sector center
+        fighter.HeadingDeg = fighter.Position.HeadingTo(sectorCenter);
+
+        // Set initial altitude and speed for CAP patrol
+        fighter.AltitudeM = CoordinateSystem.FtToM(25000); // Standard CAP altitude
+        fighter.SpeedMps = fighter.FlightModel.MaxSpeedMps * 0.75; // Cruise speed
+
+        // Initialize fuel state (full fuel)
+        fighter.FuelRemainingKg = fighter.FuelCapacityKg;
+
+        // Initialize weapon loadout
+        fighter.Aim120Count = aim120Count;
+        fighter.Aim9Count = aim9Count;
+
+        // Set behavior to orbit patrol
+        fighter.CurrentBehavior = AircraftBehavior.OrbitPatrol;
+
+        // Initialize spawn time
+        fighter.SpawnTime = DateTime.UtcNow;
+
+        // Sync physics state
+        fighter.SyncPhysicsState();
+
+        // Register entity with EntityManager
+        Add(fighter);
+
+        return fighter;
+    }
 }

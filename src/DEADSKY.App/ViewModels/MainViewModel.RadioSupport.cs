@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using DEADSKY.Core.Campaign;
 using DEADSKY.Core.Comms;
 using DEADSKY.Core.Entities;
+using DEADSKY.Core.Logging;
 using DEADSKY.Core.Radar;
 using DEADSKY.Core.Scenario;
 using DEADSKY.Core.Simulation;
@@ -216,6 +217,8 @@ public partial class MainViewModel
         var result = FriendlySupport.RequestSupport(type, "ALPHA ACTUAL", cue, Sim.GameTimeSec);
         SetStatus(result.Accepted ? $"SUPPORT TASKED: {supportType.ToUpperInvariant()}" : $"SUPPORT DENIED: {supportType.ToUpperInvariant()}");
         LogOps("SUPPORT", result.Summary);
+        GameSessionLogger.Current?.OnSupportRequest("ALPHA ACTUAL", supportType.ToUpperInvariant(), result.Accepted, result.Summary, result.EtaSec);
+        GameSessionLogger.Current?.OnPlayerAction($"DIVERT {supportType.ToUpperInvariant()}", cue);
         FlushPendingRadioTraffic();
         if (result.Accepted)
             ApplySupportGameplayEffect(type);

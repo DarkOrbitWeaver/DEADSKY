@@ -45,6 +45,13 @@ public static class ToolAccessPolicy
             "cancel_support_action",
             "update_roe",
             "set_alert_level",
+            "task_cap_intercept",
+            "request_aircraft_launch",
+            "get_airbase_status",
+            // Phase 4: Battery coordination
+            "task_battery_engage",
+            "task_battery_hold_fire",
+            "get_battery_network_status",
             "log_event"
         ],
         AgentKnowledgeRole.Intelligence =>

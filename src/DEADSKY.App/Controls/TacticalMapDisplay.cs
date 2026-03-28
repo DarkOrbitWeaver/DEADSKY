@@ -310,7 +310,7 @@ public class TacticalMapDisplay : FrameworkElement
             if (ShowLabels)
             {
                 DrawLabel(dc, $"{track.TrackDesignation} {track.TrackId}", new Point(point.X + 8, point.Y - 4), fill, 10, FontWeights.SemiBold);
-                DrawLabel(dc, $"{track.RangeNm:0.0}nm / FL{track.AltitudeFt / 100:0}", new Point(point.X + 8, point.Y + 10), Brushes.Gainsboro, 9, FontWeights.Normal);
+                DrawLabel(dc, $"{track.RangeNm * 1.852:0.0}km / {track.AltitudeFt * 0.3048 / 1000:0.0}km", new Point(point.X + 8, point.Y + 10), Brushes.Gainsboro, 9, FontWeights.Normal);
             }
         }
 

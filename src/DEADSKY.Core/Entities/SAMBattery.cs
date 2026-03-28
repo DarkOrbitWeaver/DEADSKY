@@ -134,6 +134,50 @@ public class SAMBattery : Entity
     public double MissileMinAltFt { get; set; } = 50;
     public double MissileSingleShotPk { get; set; } = 0.70;
 
+    // ── Phase 4: Battery Network Coordination ──────────────────────────
+    /// <summary>Unique identifier for the battery network (shared among coordinated batteries)</summary>
+    public string? BatteryNetworkId { get; set; }
+
+    /// <summary>True if this battery is the network coordinator</summary>
+    public bool IsNetworkCoordinator { get; set; }
+
+    /// <summary>List of linked battery IDs in the coordination network</summary>
+    public List<string> LinkedBatteryIds { get; set; } = new();
+
+    /// <summary>Track data shared with the network (trackId -> last update time)</summary>
+    public Dictionary<string, DateTime> SharedTrackData { get; set; } = new();
+
+    /// <summary>Current engagement assignment from coordinator</summary>
+    public string? AssignedEngagementTrackId { get; set; }
+
+    /// <summary>True if battery is in track-only mode (not engaging)</summary>
+    public bool IsInTrackOnlyMode { get; set; }
+
+    // ── Phase 4: SEAD Vulnerability (ARM Threats) ──────────────────────
+    /// <summary>True if radar is actively emitting (vulnerable to ARM)</summary>
+    public bool IsRadiating => RadarOnline && RadarMode is not RadarMode.Silent and not RadarMode.Standby;
+
+    /// <summary>True if battery is being targeted by Anti-Radiation Missile</summary>
+    public bool IsBeingTargetedByARM { get; private set; }
+
+    /// <summary>Bearing of detected ARM threat (degrees)</summary>
+    public double? ARMThreatBearing { get; private set; }
+
+    /// <summary>Range of detected ARM threat (nautical miles)</summary>
+    public double? ARMThreatRangeNm { get; private set; }
+
+    /// <summary>Time when ARM threat was first detected</summary>
+    public DateTime? ARMThreatDetectedTime { get; private set; }
+
+    /// <summary>True if battery has gone silent to avoid ARM</summary>
+    public bool IsInSilentMode { get; private set; }
+
+    /// <summary>Time when battery entered silent mode</summary>
+    public DateTime? SilentModeEnteredTime { get; private set; }
+
+    /// <summary>Duration battery can remain in silent mode before needing to reactivate (seconds)</summary>
+    public double SilentModeDurationSec { get; set; } = 120.0;
+
     public SAMBattery()
     {
         Type = EntityType.SAMBattery;
@@ -158,6 +202,9 @@ public class SAMBattery : Entity
     public override void Update(double deltaTime)
     {
         // Battery doesn't move (unless mobile upgrade), but updates radar sweep and launcher states
+
+        // Update SEAD/ARM threat state
+        UpdateARMThreat(deltaTime);
 
         // Radar sweep rotation
         if (RadarOnline && RadarMode != RadarMode.Silent && RadarMode != RadarMode.Standby)
@@ -203,4 +250,89 @@ public class SAMBattery : Entity
 
     public double GetEffectiveMinAltFt() =>
         HasLowAltitudeModule ? RadarMinAltFt * 0.4 : RadarMinAltFt;
+
+    // ── Phase 4: SEAD Defense Methods ──────────────────────────────────
+
+    /// <summary>
+    /// Go silent to avoid Anti-Radiation Missile (ARM) threat.
+    /// Turns off radar emissions to break ARM lock.
+    /// </summary>
+    public void GoSilent()
+    {
+        if (IsInSilentMode) return;
+
+        RadarOnline = false;
+        RadarMode = RadarMode.Silent;
+        IsInSilentMode = true;
+        SilentModeEnteredTime = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Reactivate radar after ARM threat has passed.
+    /// </summary>
+    public void GoActive()
+    {
+        if (!IsInSilentMode) return;
+
+        RadarOnline = true;
+        RadarMode = RadarMode.Search;
+        IsInSilentMode = false;
+        SilentModeEnteredTime = null;
+        ClearARMThreat();
+    }
+
+    /// <summary>
+    /// Detect and track ARM threat.
+    /// Called when RWR detects ARM radar lock.
+    /// </summary>
+    public void DetectARMThreat(double bearingDeg, double rangeNm)
+    {
+        IsBeingTargetedByARM = true;
+        ARMThreatBearing = bearingDeg;
+        ARMThreatRangeNm = rangeNm;
+        ARMThreatDetectedTime = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Clear ARM threat detection.
+    /// </summary>
+    public void ClearARMThreat()
+    {
+        IsBeingTargetedByARM = false;
+        ARMThreatBearing = null;
+        ARMThreatRangeNm = null;
+        ARMThreatDetectedTime = null;
+    }
+
+    /// <summary>
+    /// Update ARM threat state.
+    /// Automatically go silent if ARM is inbound and radar is active.
+    /// </summary>
+    public void UpdateARMThreat(double deltaTime)
+    {
+        // Check if ARM threat has expired (no update for 30 seconds)
+        if (ARMThreatDetectedTime.HasValue &&
+            (DateTime.UtcNow - ARMThreatDetectedTime.Value).TotalSeconds > 30)
+        {
+            ClearARMThreat();
+        }
+
+        // Auto-evasion: Go silent if ARM is inbound and we're radiating
+        if (IsBeingTargetedByARM && IsRadiating && !IsInSilentMode)
+        {
+            GoSilent();
+        }
+
+        // Check if we can come out of silent mode
+        if (IsInSilentMode && SilentModeEnteredTime.HasValue)
+        {
+            double timeInSilentSec = (DateTime.UtcNow - SilentModeEnteredTime.Value).TotalSeconds;
+            
+            // Auto-reactivate after threat expires or timeout
+            if (!IsBeingTargetedByARM || timeInSilentSec > SilentModeDurationSec)
+            {
+                GoActive();
+            }
+        }
+    }
 }

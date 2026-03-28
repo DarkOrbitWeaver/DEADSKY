@@ -11,7 +11,8 @@ public enum EntityType
     RadarStation,
     SAMBattery,
     Helicopter,
-    Decoy
+    Decoy,
+    Airbase
 }
 
 public enum Affiliation

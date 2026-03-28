@@ -1,0 +1,89 @@
+<UserControl x:Class="DEADSKY.App.Controls.CollapsibleSection"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Name="Root">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/Themes/MilitaryDarkTheme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <Border Style="{StaticResource MilPanel}">
+        <Grid>
+            <Grid.RowDefinitions>
+                <!-- Header row — always visible -->
+                <RowDefinition Height="Auto"/>
+                <!-- Content row — animated between 0 and Auto -->
+                <RowDefinition x:Name="ContentRow" Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- ── Header ─────────────────────────────────────────────── -->
+            <Border Grid.Row="0"
+                    x:Name="HeaderBorder"
+                    Cursor="Hand"
+                    MouseLeftButtonUp="Header_MouseLeftButtonUp">
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource PanelHeaderStyle}">
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <ColorAnimation Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                            To="#1A2F3F"
+                                                            Duration="0:0:0.01"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <ColorAnimation Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                            To="#132430"
+                                                            Duration="0:0:0.01"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding Header, ElementName=Root}"
+                               Style="{StaticResource HeaderText}"
+                               VerticalAlignment="Center"/>
+
+                    <!-- Chevron — rotated via RotateTransform in code-behind -->
+                    <TextBlock x:Name="Chevron"
+                               Grid.Column="1"
+                               Text="▼"
+                               Style="{StaticResource SectionKicker}"
+                               VerticalAlignment="Center"
+                               Margin="8,0,0,0"
+                               RenderTransformOrigin="0.5,0.5">
+                        <TextBlock.RenderTransform>
+                            <RotateTransform x:Name="ChevronRotate" Angle="0"/>
+                        </TextBlock.RenderTransform>
+                    </TextBlock>
+                </Grid>
+            </Border>
+
+            <!-- ── Content ────────────────────────────────────────────── -->
+            <Border Grid.Row="1"
+                    x:Name="ContentBorder"
+                    MaxHeight="2000"
+                    ClipToBounds="True">
+                <ContentPresenter Content="{Binding SectionContent, ElementName=Root}"/>
+            </Border>
+        </Grid>
+    </Border>
+</UserControl>
+

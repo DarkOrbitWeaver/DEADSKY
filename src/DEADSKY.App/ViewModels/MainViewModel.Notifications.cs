@@ -84,29 +84,49 @@ public partial class MainViewModel
         NotificationSeverity severity,
         double durationSeconds = 7)
     {
-        PruneNotifications();
+        // CRITICAL: Dispatch to UI thread asynchronously to prevent deadlocks
+        DispatchToUI(() =>
+        {
+            try
+            {
+                PruneNotifications();
 
-        ActiveNotifications.Insert(0, new NotificationCardViewModel(
-            sourceTag,
-            title,
-            body,
-            severity,
-            DateTime.UtcNow.AddSeconds(durationSeconds)));
+                ActiveNotifications.Insert(0, new NotificationCardViewModel(
+                    sourceTag,
+                    title,
+                    body,
+                    severity,
+                    DateTime.UtcNow.AddSeconds(durationSeconds)));
 
-        IncrementAlertsUnread();
+                IncrementAlertsUnread();
 
-        while (ActiveNotifications.Count > 5)
-            ActiveNotifications.RemoveAt(ActiveNotifications.Count - 1);
+                while (ActiveNotifications.Count > 5)
+                    ActiveNotifications.RemoveAt(ActiveNotifications.Count - 1);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Notifications] ERROR in PushNotification: {ex.Message}");
+                // Never crash - notifications are non-critical
+            }
+        });
     }
 
     private void PruneNotifications()
     {
-        var expired = ActiveNotifications
-            .Where(notification => notification.ExpiresAtUtc <= DateTime.UtcNow)
-            .ToList();
+        try
+        {
+            var expired = ActiveNotifications
+                .Where(notification => notification.ExpiresAtUtc <= DateTime.UtcNow)
+                .ToList();
 
-        foreach (var notification in expired)
-            ActiveNotifications.Remove(notification);
+            foreach (var notification in expired)
+                ActiveNotifications.Remove(notification);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[Notifications] ERROR in PruneNotifications: {ex.Message}");
+            // Never crash - just skip pruning this time
+        }
     }
 
     private void ResetNotificationState()

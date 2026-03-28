@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DEADSKY.Core.Comms;
 using DEADSKY.Core.Entities;
+using DEADSKY.Core.EnemyAI;
 using DEADSKY.Core.Physics;
 using DEADSKY.Core.Simulation;
 
@@ -140,6 +141,7 @@ public sealed class ScenarioManager
     }
 
     private readonly SimulationEngine _sim;
+    private readonly GroupTacticManager? _tactics;
     private readonly HashSet<int> _spawnedWaveIndices = new();
     private readonly HashSet<string> _countedBreakthroughs = new();
     private bool _missionResolved;
@@ -150,9 +152,10 @@ public sealed class ScenarioManager
     public event Action<string>? OnWaveSpawned;
     public event Action<MissionOutcome, string>? OnMissionComplete;
 
-    public ScenarioManager(SimulationEngine sim)
+    public ScenarioManager(SimulationEngine sim, GroupTacticManager? tactics = null)
     {
         _sim = sim;
+        _tactics = tactics;
     }
 
     public void LoadScenario(ScenarioDefinition scenario)
@@ -263,6 +266,22 @@ public sealed class ScenarioManager
         }
 
         _spawnedWaveIndices.Add(index);
+        
+        // Assign group tactics based on wave composition
+        if (_tactics != null && spawned > 0)
+        {
+            var groupAircraft = _sim.Entities.GetHostileAircraft()
+                .OfType<Aircraft>()
+                .Where(a => a.GroupId == waveName)
+                .ToList();
+            
+            if (groupAircraft.Count > 0)
+            {
+                var tactic = DoctrineRules.RecommendGroupTactic(wave, groupAircraft, 0.0);
+                _tactics.CreateGroup(waveName, groupAircraft.Select(a => a.Id), tactic);
+            }
+        }
+        
         string roleText = string.IsNullOrWhiteSpace(wave.PackageRole)
             ? "hostile package"
             : wave.PackageRole.Replace('_', ' ');

@@ -1,3 +1,4 @@
+using DEADSKY.Core.Campaign;
 using DEADSKY.Core.Comms;
 using DEADSKY.Core.Entities;
 using DEADSKY.Core.Logging;
@@ -24,6 +25,8 @@ public sealed class SimulationEngine : IDisposable
     public CommManager Comms { get; } = new();
     public EventBus Events { get; } = new();
     public WeaponsSystem Weapons { get; }
+    public AirbaseManager Airbases { get; }
+    public BatteryCoordinator Batteries { get; }
     public WeatherState Weather { get; } = new();
     public CrewRoster? Crew { get; set; }
     public double GameTimeSec { get; private set; }
@@ -45,6 +48,8 @@ public sealed class SimulationEngine : IDisposable
     public SimulationEngine()
     {
         Weapons = new WeaponsSystem(Entities, Radar.TrackManager);
+        Airbases = new AirbaseManager(Entities, Comms);
+        Batteries = new BatteryCoordinator(Entities, Comms);
 
         _timer = new System.Timers.Timer(100);
         _timer.AutoReset = true;
@@ -326,7 +331,9 @@ public sealed class SimulationEngine : IDisposable
             
             GameLogger.Debug("SIM-TICK", "Updating weapons system");
             Weapons.Update(deltaTime);
-            
+            Airbases.Tick(deltaTime);
+            Batteries.Tick(deltaTime, LatestSnapshot);
+
             GameLogger.Debug("SIM-TICK", "Updating entities");
             Entities.UpdateAll(deltaTime);
             
@@ -443,6 +450,10 @@ public sealed class SimulationEngine : IDisposable
         };
         var threatStates = OperationalPictureBuilder.BuildThreatStates(snapshotSeed);
 
+        // Phase 4: Get battery network status
+        var batteries = Entities.GetByType<SAMBattery>();
+        var coordinator = batteries.FirstOrDefault(b => b.IsNetworkCoordinator);
+        
         LatestSnapshot = new SimulationSnapshot
         {
             GameTimeSec = snapshotSeed.GameTimeSec,
@@ -462,7 +473,13 @@ public sealed class SimulationEngine : IDisposable
             RadarSweepAngle = snapshotSeed.RadarSweepAngle,
             RadarRangeNm = snapshotSeed.RadarRangeNm,
             RadarMode = snapshotSeed.RadarMode,
-            Weather = snapshotSeed.Weather
+            Weather = snapshotSeed.Weather,
+            // Phase 4: Battery network status
+            BatteryNetworkStatus = Batteries.GetNetworkStatus(),
+            ActiveBatteryCount = batteries.Count(b => b.Status == EntityStatus.Active),
+            SilentBatteryCount = batteries.Count(b => b.IsInSilentMode),
+            ARMThreatCount = batteries.Count(b => b.IsBeingTargetedByARM),
+            NetworkCoordinator = coordinator?.Callsign
         };
     }
 

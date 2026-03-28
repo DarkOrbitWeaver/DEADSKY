@@ -1,6 +1,7 @@
 using DEADSKY.Core.Comms;
 using DEADSKY.Core.Entities;
 using DEADSKY.Core.Physics;
+using DEADSKY.Core.Radar;
 using DEADSKY.Core.Scenario;
 using DEADSKY.Core.Simulation;
 
@@ -49,6 +50,13 @@ public sealed class FriendlySupportPackage
     public double AltitudeFt { get; set; }
     public Vec2 Position => CoordinateSystem.FromBearingRange(BearingDeg, RangeNm);
 
+    // ── Real entity tracking (Task 2.1) ───────────────────────────────
+    /// <summary>
+    /// Entity ID of spawned CAP fighter (for CombatAirPatrol type).
+    /// Null if no entity is currently spawned.
+    /// </summary>
+    public string? SpawnedEntityId { get; set; }
+
     public bool IsVisibleInPicture => VisibleUntilSec > 0;
     public string StatusLine => $"{DisplayName} // {UnitCallsign} | {Availability.ToString().ToUpper()} | REL {Reliability:P0} | {LastSummary}";
 }
@@ -70,17 +78,26 @@ public sealed record SupportRequestResult(
 public sealed class FriendlySupportDirector
 {
     private readonly CommManager _comms;
+    private readonly EntityManager? _entityManager;
+    private readonly RadarSystem? _radarSystem;
     private readonly List<FriendlySupportPackage> _packages = new();
     private readonly List<SupportRequest> _pendingRequests = new();
     private int _recentCriticalIncidents;
+
+    // Task 5.5: AWACS picture broadcast timer
+    // Requirement 5.1: AWACS broadcasts picture at 30-90 second intervals.
+    private double _awacsPictureTimer;
+    private double _awacsPictureInterval = 60.0; // Randomized each broadcast
 
     public double CommandConfidence { get; private set; } = 1.0;
     public string CommandPostureSummary { get; private set; } = "COMMAND POSTURE: STEADY.";
     public string LiveConsequenceSummary { get; private set; } = "SUPPORT CONSEQUENCE: NO LIVE COMMAND STRAIN.";
 
-    public FriendlySupportDirector(CommManager comms)
+    public FriendlySupportDirector(CommManager comms, EntityManager? entityManager = null, RadarSystem? radarSystem = null)
     {
         _comms = comms;
+        _entityManager = entityManager;
+        _radarSystem = radarSystem;
     }
 
     public IReadOnlyList<FriendlySupportPackage> Packages => _packages;
@@ -234,10 +251,22 @@ public sealed class FriendlySupportDirector
         });
     }
 
-    public void Tick(double deltaTime, double gameTimeSec)
+    public void Tick(double deltaTime, double gameTimeSec, SimulationSnapshot? snapshot = null)
     {
         foreach (var package in _packages)
         {
+            // Task 2.1: Update CAP entity state if entity is spawned
+            if (package.Type == FriendlySupportType.CombatAirPatrol && package.SpawnedEntityId != null)
+            {
+                UpdateCapEntityState(package);
+            }
+
+            // Task 5.3: Update AWACS entity state if entity is spawned
+            if (package.Type == FriendlySupportType.Awacs && package.SpawnedEntityId != null)
+            {
+                UpdateAwacsEntityState(package, deltaTime, snapshot);
+            }
+
             if (package.DelayRemainingSec > 0)
             {
                 package.DelayRemainingSec = Math.Max(0, package.DelayRemainingSec - deltaTime);
@@ -251,6 +280,19 @@ public sealed class FriendlySupportDirector
                     package.LastSummary = failed
                         ? BuildFailureSummary(package.Type, package.UnitCallsign)
                         : BuildCompletionSummary(package.Type, package.UnitCallsign);
+
+                    // Task 2.1: Spawn real CAP entity when CAP becomes available
+                    if (!failed && package.Type == FriendlySupportType.CombatAirPatrol && _entityManager != null)
+                    {
+                        SpawnCapFighter(package);
+                    }
+
+                    // Task 5.3: Spawn real AWACS entity when AWACS becomes available
+                    if (!failed && package.Type == FriendlySupportType.Awacs && _entityManager != null)
+                    {
+                        SpawnAwacsAircraft(package);
+                    }
+
                     _comms.Queue(CommManager.CreateMessage(
                         RadioRules.CreateFriendlySupportProfile(package.DisplayName, package.RankOrRole, package.UnitCallsign, package.Designation),
                         ResolveChannel(package.Type),
@@ -277,7 +319,7 @@ public sealed class FriendlySupportDirector
             if (package.VisibleUntilSec > 0)
             {
                 package.VisibleUntilSec = Math.Max(0, package.VisibleUntilSec - deltaTime);
-                UpdateVisiblePosition(package, gameTimeSec);
+                UpdateVisiblePosition(package, gameTimeSec, snapshot);
             }
         }
 
@@ -529,15 +571,40 @@ public sealed class FriendlySupportDirector
         _ => $"{unitCallsign}, support action degraded in execution."
     };
 
-    private static void UpdateVisiblePosition(FriendlySupportPackage package, double gameTimeSec)
+    private static void UpdateVisiblePosition(FriendlySupportPackage package, double gameTimeSec, SimulationSnapshot? snapshot = null)
     {
         double orbitPhase = gameTimeSec / 18.0;
         switch (package.Type)
         {
             case FriendlySupportType.CombatAirPatrol:
-                package.BearingDeg = NormalizeBearing(285 + Math.Sin(orbitPhase) * 24);
-                package.RangeNm = 64 + Math.Cos(orbitPhase) * 6;
-                package.AltitudeFt = 25000 + Math.Sin(orbitPhase * 0.8) * 1800;
+                // If there are hostile tracks, vector toward the highest-threat one
+                // rather than just orbiting. CAP moves at ~450kts (~0.25nm/s).
+                var primaryThreat = snapshot?.HostileTracks
+                    .Where(t => t.IsHot && t.RangeNm < 120)
+                    .OrderByDescending(t => t.ThreatLevel)
+                    .FirstOrDefault();
+
+                if (primaryThreat != null)
+                {
+                    // Steer CAP bearing toward threat bearing, close range by ~0.25nm/s
+                    double bearingDiff = NormalizeBearing(primaryThreat.BearingDeg - package.BearingDeg);
+                    if (bearingDiff > 180) bearingDiff -= 360;
+                    package.BearingDeg = NormalizeBearing(package.BearingDeg + Math.Sign(bearingDiff) * Math.Min(Math.Abs(bearingDiff), 1.5));
+
+                    double rangeDiff = primaryThreat.RangeNm - package.RangeNm;
+                    // Close to intercept range (stay ~15nm outside threat, don't fly into SAM envelope)
+                    double targetRange = Math.Max(primaryThreat.RangeNm + 15, 30);
+                    double rangeStep = Math.Sign(package.RangeNm - targetRange) * Math.Min(Math.Abs(package.RangeNm - targetRange), 0.25);
+                    package.RangeNm = Math.Clamp(package.RangeNm - rangeStep, 20, 120);
+                    package.AltitudeFt = 25000 + Math.Sin(orbitPhase * 0.8) * 1800;
+                }
+                else
+                {
+                    // No active threat — hold CAP orbit west of sector
+                    package.BearingDeg = NormalizeBearing(285 + Math.Sin(orbitPhase) * 24);
+                    package.RangeNm = 64 + Math.Cos(orbitPhase) * 6;
+                    package.AltitudeFt = 25000 + Math.Sin(orbitPhase * 0.8) * 1800;
+                }
                 break;
             case FriendlySupportType.JammingSupport:
                 package.BearingDeg = NormalizeBearing(330 + Math.Sin(orbitPhase * 0.7) * 10);
@@ -583,5 +650,335 @@ public sealed class FriendlySupportDirector
         if (normalized > 180) normalized -= 360;
         if (normalized < -180) normalized += 360;
         return normalized;
+    }
+
+    /// <summary>
+    /// Task 5.3: Spawns a real AWACS entity when AWACS support becomes available.
+    /// Wires CommManager and configures racetrack orbit parameters.
+    /// Requirement 4.1: AWACS entity at 30,000 feet altitude with orbit pattern.
+    /// Requirement 4.7: AWACS availability tracked via entity state.
+    /// </summary>
+    private void SpawnAwacsAircraft(FriendlySupportPackage package)
+    {
+        if (_entityManager == null)
+            return;
+
+        // Calculate orbit center from package position
+        Vec2 orbitCenter = CoordinateSystem.FromBearingRange(package.BearingDeg, package.RangeNm);
+
+        var awacs = new AWACSAircraft
+        {
+            // Identity
+            CallSign = package.UnitCallsign,
+            Designation = package.Designation,
+            Affiliation = Affiliation.Friendly,
+            // Position: start at orbit center, heading east
+            Position = orbitCenter,
+            HeadingDeg = 090,
+            AltitudeM = CoordinateSystem.FtToM(30000),
+            SpeedMps = CoordinateSystem.KtsToMps(460), // Cruise
+            // Racetrack orbit parameters
+            RacetrackLegLengthNm = 60.0,
+            RacetrackHeadingDeg = 090,
+            RacetrackTurnRadiusNm = 10.0,
+            RadarCoverageRadiusNm = 200.0,
+            // Behavior
+            CurrentBehavior = AircraftBehavior.OrbitPatrol,
+            SpawnTime = DateTime.UtcNow
+        };
+
+        // Wire CommManager for radio communications (Task 5.5)
+        awacs.CommManager = _comms;
+
+        // Sync physics state
+        awacs.SyncPhysicsState();
+
+        // Register with EntityManager
+        _entityManager.Add(awacs);
+
+        // Track entity ID in package
+        package.SpawnedEntityId = awacs.Id;
+
+        // Send on-station radio message
+        _comms.Queue(CommManager.CreateMessage(
+            RadioRules.CreateFriendlySupportProfile(package.DisplayName, package.RankOrRole, package.UnitCallsign, package.Designation),
+            RadioChannel.IntelNet,
+            $"{package.UnitCallsign}, on station, angels 30, establishing wide-area picture. Ready to support.",
+            MessagePriority.Priority,
+            MessageType.StatusReport,
+            recipient: "ALPHA",
+            canReply: true,
+            staticLevel: 0.10));
+    }
+
+    /// <summary>
+    /// Task 5.3: Updates AWACS availability based on spawned entity state.
+    /// Mirrors UpdateCapEntityState for the AWACS lifecycle.
+    /// Requirement 4.7: AWACS availability tracked via entity state.
+    /// </summary>
+    private void UpdateAwacsEntityState(FriendlySupportPackage package, double deltaTime, SimulationSnapshot? snapshot)
+    {
+        if (_entityManager == null || package.SpawnedEntityId == null)
+            return;
+
+        var entity = _entityManager.Get(package.SpawnedEntityId);
+
+        // Entity destroyed — update availability to damaged
+        if (entity == null || entity.Status == EntityStatus.Destroyed)
+        {
+            if (entity != null && entity.Status == EntityStatus.Destroyed)
+                _entityManager.Remove(package.SpawnedEntityId, "AWACS destroyed");
+
+            package.SpawnedEntityId = null;
+            package.Availability = SupportAvailabilityState.Damaged;
+            package.CooldownRemainingSec = GetCooldown(package.Type);
+            package.LastSummary = $"{package.UnitCallsign}, picture link lost. Rebuilding coverage.";
+
+            _comms.Queue(CommManager.CreateMessage(
+                RadioRules.CreateFriendlySupportProfile(package.DisplayName, package.RankOrRole, package.UnitCallsign, package.Designation),
+                RadioChannel.IntelNet,
+                package.LastSummary,
+                MessagePriority.Immediate,
+                MessageType.Alert,
+                recipient: "ALPHA",
+                canReply: false,
+                staticLevel: 0.3));
+            return;
+        }
+
+        // AWACS bingo fuel — RTB
+        if (entity is Aircraft awacsAircraft && awacsAircraft.IsOnRTB)
+        {
+            _entityManager.Remove(package.SpawnedEntityId, "AWACS bingo fuel, RTB");
+            package.SpawnedEntityId = null;
+            package.Availability = SupportAvailabilityState.CoolingDown;
+            package.CooldownRemainingSec = GetCooldown(package.Type);
+            package.LastSummary = $"{package.UnitCallsign}, bingo fuel, departing station, picture handoff to GCI.";
+
+            _comms.Queue(CommManager.CreateMessage(
+                RadioRules.CreateFriendlySupportProfile(package.DisplayName, package.RankOrRole, package.UnitCallsign, package.Designation),
+                RadioChannel.IntelNet,
+                package.LastSummary,
+                MessagePriority.Priority,
+                MessageType.StatusReport,
+                recipient: "ALPHA",
+                canReply: false,
+                staticLevel: 0.12));
+            return;
+        }
+
+        // Task 5.5: AWACS periodic picture broadcast.
+        // Requirement 5.1: Picture at 30-90 second intervals.
+        // Requirement 5.2: Use Bullseye reference format.
+        _awacsPictureTimer += deltaTime; // Increment by actual simulation delta
+        if (_awacsPictureTimer >= _awacsPictureInterval)
+        {
+            _awacsPictureTimer = 0;
+            // Randomize next interval 30-90 seconds
+            _awacsPictureInterval = 30.0 + SimulationRandom.Instance.NextDouble() * 60.0;
+            SendAwacsPicture(package, snapshot);
+        }
+    }
+
+    /// <summary>
+    /// Task 5.5: Generates and queues an AWACS air picture broadcast in Bullseye format.
+    /// Requirement 5.2: Use Bullseye reference (battery = Bulls) for group positions.
+    /// Requirement 5.3: Include track count, group bearings, altitudes.
+    /// Requirement 5.4: Broadcast defensive status when under heavy attack.
+    /// Requirement 5.5: Use IntelNet channel for picture traffic.
+    /// </summary>
+    private void SendAwacsPicture(FriendlySupportPackage package, SimulationSnapshot? snapshot)
+    {
+        if (snapshot == null) return;
+
+        var speaker = RadioRules.CreateFriendlySupportProfile(
+            package.DisplayName, package.RankOrRole, package.UnitCallsign, package.Designation);
+
+        // Build group picture from hostile tracks
+        var hostileTracks = snapshot.HostileTracks;
+        int trackCount = hostileTracks.Count;
+
+        string pictureContent;
+        if (trackCount == 0)
+        {
+            // Requirement 5.4: Defensive status — all clear
+            pictureContent = $"{package.UnitCallsign}, PICTURE CLEAN. No hostile tracks at this time.";
+        }
+        else if (trackCount <= 3)
+        {
+            // Small raid — call individual groups
+            var groups = hostileTracks
+                .OrderByDescending(t => t.ThreatLevel)
+                .Take(3)
+                .Select(t =>
+                    $"SINGLE GROUP BEARING {t.BearingDeg:000}, {t.RangeNm:F0}NM, ANGELS {(int)(t.AltitudeFt / 1000)}, {t.AspectString}")
+                .ToList();
+
+            pictureContent = $"{package.UnitCallsign}, PICTURE: {string.Join(". ", groups)}.";
+        }
+        else
+        {
+            // Large raid — summarize by sector and call primary threat
+            var primaryThreat = hostileTracks.OrderByDescending(t => t.ThreatLevel).First();
+            int inbound = hostileTracks.Count(t => t.IsHot);
+            pictureContent = $"{package.UnitCallsign}, PICTURE: {trackCount} GROUPS. PRIMARY THREAT BEARING " +
+                $"{primaryThreat.BearingDeg:000}, {primaryThreat.RangeNm:F0}NM, ANGELS {(int)(primaryThreat.AltitudeFt / 1000)}. " +
+                $"{inbound} GROUPS INBOUND HOT.";
+        }
+
+        // Requirement 5.4: Append DEFENSIVE call when under heavy pressure
+        bool defensiveCall = trackCount >= 6 || hostileTracks.Any(t => t.RangeNm < 20 && t.ThreatLevel > 0.7);
+        if (defensiveCall)
+            pictureContent += $" {package.UnitCallsign}, DEFENSIVE.";
+
+        _comms.Queue(CommManager.CreateMessage(
+            speaker,
+            RadioChannel.IntelNet,
+            pictureContent,
+            MessagePriority.Routine,
+            MessageType.IntelUpdate,
+            recipient: "ALPHA",
+            canReply: false,
+            staticLevel: 0.08));
+    }
+
+    /// <summary>
+    /// Task 2.1: Spawns a real CAP fighter entity when CAP support becomes available.
+    /// Task 4.4: Wires CommManager to CAP fighter for radio communications.
+    /// </summary>
+    private void SpawnCapFighter(FriendlySupportPackage package)
+    {
+        if (_entityManager == null)
+            return;
+
+        // Calculate patrol sector from package position
+        Vec2 sectorCenter = CoordinateSystem.FromBearingRange(package.BearingDeg, package.RangeNm);
+        double sectorRadiusNm = 15.0; // Standard CAP patrol sector radius
+
+        // Spawn the fighter with default loadout (4x AIM-120, 2x AIM-9)
+        var fighter = _entityManager.SpawnFriendlyFighter(
+            callsign: package.UnitCallsign,
+            sectorId: package.Id,
+            sectorCenter: sectorCenter,
+            sectorRadiusNm: sectorRadiusNm,
+            aim120Count: 4,
+            aim9Count: 2);
+
+        // Task 4.4: Wire CommManager to enable radio communications
+        fighter.CommManager = _comms;
+
+        // Track the spawned entity ID
+        package.SpawnedEntityId = fighter.Id;
+    }
+
+    /// <summary>
+    /// Task 2.1 & 2.2: Updates CAP availability based on spawned entity state.
+    /// Called during Tick to check if spawned CAP fighters are still active.
+    /// Task 2.2: Despawns CAP fighters when they RTB or are destroyed.
+    /// Task 4.2: Updates intercept course when CAP fighter is intercepting a target.
+    /// </summary>
+    private void UpdateCapEntityState(FriendlySupportPackage package)
+    {
+        if (_entityManager == null || package.SpawnedEntityId == null)
+            return;
+
+        var entity = _entityManager.Get(package.SpawnedEntityId);
+        
+        // If entity no longer exists or is destroyed, update availability
+        if (entity == null || entity.Status == EntityStatus.Destroyed)
+        {
+            // Task 2.2: Despawn the entity if it still exists (destroyed but not yet removed)
+            if (entity != null && entity.Status == EntityStatus.Destroyed)
+            {
+                _entityManager.Remove(package.SpawnedEntityId, "CAP fighter destroyed");
+            }
+            
+            package.SpawnedEntityId = null;
+            package.Availability = SupportAvailabilityState.Damaged;
+            package.CooldownRemainingSec = GetCooldown(package.Type);
+            package.LastSummary = "CAP fighter lost. Rebuilding coverage.";
+            return;
+        }
+        
+        // Task 2.2: If entity is RTB (Winchester or bingo fuel), despawn and start cooldown
+        if (entity is Aircraft aircraft && (aircraft.IsOnRTB || aircraft.IsWinchester))
+        {
+            // Despawn the CAP fighter when it RTBs
+            _entityManager.Remove(package.SpawnedEntityId, aircraft.IsWinchester 
+                ? "CAP fighter Winchester, RTB" 
+                : "CAP fighter bingo fuel, RTB");
+            
+            package.SpawnedEntityId = null;
+            package.Availability = SupportAvailabilityState.CoolingDown;
+            package.CooldownRemainingSec = GetCooldown(package.Type);
+            package.LastSummary = aircraft.IsWinchester 
+                ? "CAP fighter Winchester, returning to base."
+                : "CAP fighter bingo fuel, returning to base.";
+            return;
+        }
+
+        // Task 4.2: Update intercept course if CAP fighter is intercepting a target
+        if (entity is Aircraft capFighter && !string.IsNullOrEmpty(capFighter.InterceptTargetTrackId))
+        {
+            UpdateInterceptCourse(capFighter);
+        }
+    }
+
+    /// <summary>
+    /// Task 4.2: Updates the intercept course for a CAP fighter based on current target position and velocity.
+    /// Requirement 3.4: WHILE intercepting, THE CAP_Fighter SHALL update its course if the target Track maneuvers.
+    /// Requirement 3.5: IF the target Track is destroyed before intercept, THEN THE CAP_Fighter SHALL report target lost and resume patrol.
+    /// </summary>
+    private void UpdateInterceptCourse(Aircraft capFighter)
+    {
+        if (_radarSystem == null || string.IsNullOrEmpty(capFighter.InterceptTargetTrackId))
+            return;
+
+        // Get the target track from RadarSystem
+        var targetTrack = _radarSystem.TrackManager.GetById(capFighter.InterceptTargetTrackId);
+        
+        // If target track is lost or destroyed, resume patrol
+        if (targetTrack == null || targetTrack.Quality == TrackQuality.Lost)
+        {
+            capFighter.ResumePatrol();
+            
+            // Send target lost report
+            if (capFighter.CommManager != null && !string.IsNullOrEmpty(capFighter.CallSign))
+            {
+                var speaker = RadioRules.CreateFriendlySupportProfile(
+                    capFighter.CallSign,
+                    "CAP FIGHTER",
+                    capFighter.CallSign,
+                    capFighter.Designation);
+
+                var message = CommManager.CreateMessage(
+                    speaker,
+                    RadioChannel.CommandNet,
+                    $"{capFighter.CallSign}, target lost, resuming patrol",
+                    MessagePriority.Routine,
+                    MessageType.StatusReport,
+                    recipient: "ALPHA ACTUAL",
+                    canReply: false,
+                    staticLevel: 0.15);
+
+                _comms.Queue(message);
+            }
+            return;
+        }
+
+        // Calculate target position and velocity from track
+        Vec2 targetPosition = targetTrack.Position;
+        
+        // Estimate target velocity from track heading and speed
+        // Convert heading to radians and calculate velocity vector
+        double headingRad = targetTrack.HeadingDeg * Math.PI / 180.0;
+        double speedMps = targetTrack.SpeedKts * 0.514444; // Convert knots to m/s
+        Vec2 targetVelocity = new Vec2(
+            Math.Sin(headingRad) * speedMps,
+            Math.Cos(headingRad) * speedMps
+        );
+
+        // Update intercept course
+        capFighter.SetInterceptCourse(targetPosition, targetVelocity);
     }
 }

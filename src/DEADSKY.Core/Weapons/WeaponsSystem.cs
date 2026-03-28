@@ -1,4 +1,5 @@
 using DEADSKY.Core.Entities;
+using DEADSKY.Core.Logging;
 using DEADSKY.Core.Physics;
 using DEADSKY.Core.Radar;
 using DEADSKY.Core.Simulation;
@@ -352,24 +353,34 @@ public class WeaponsSystem
         {
             if (hostile.Role == AircraftRole.SEAD && hostile.HasARMCapability && radarEmitting)
             {
+                if (hostile.CurrentBehavior != AircraftBehavior.SEAD)
+                    GameSessionLogger.Current?.OnBehaviorChanged(hostile.Id, hostile.Designation, hostile.CurrentBehavior.ToString(), nameof(AircraftBehavior.SEAD), "sead_arm_radar_emitting");
                 hostile.CurrentBehavior = AircraftBehavior.SEAD;
                 continue;
             }
 
             if (hostile.Role == AircraftRole.ECMEscort && (hostile.RadarLockDetected || innerRingPressure))
             {
+                if (hostile.CurrentBehavior != AircraftBehavior.ECMStandoff)
+                    GameSessionLogger.Current?.OnBehaviorChanged(hostile.Id, hostile.Designation, hostile.CurrentBehavior.ToString(), nameof(AircraftBehavior.ECMStandoff), innerRingPressure ? "inner_ring" : "radar_lock");
                 hostile.CurrentBehavior = AircraftBehavior.ECMStandoff;
                 continue;
             }
 
             if (hostile.Role == AircraftRole.Fighter && (hostile.HardLockDetected || innerRingPressure))
             {
+                if (hostile.CurrentBehavior != AircraftBehavior.EscortCover)
+                    GameSessionLogger.Current?.OnBehaviorChanged(hostile.Id, hostile.Designation, hostile.CurrentBehavior.ToString(), nameof(AircraftBehavior.EscortCover), innerRingPressure ? "inner_ring" : "hard_lock");
                 hostile.CurrentBehavior = AircraftBehavior.EscortCover;
                 continue;
             }
 
             if (hostile.Role == AircraftRole.Striker && hostile.HardLockDetected)
+            {
+                if (hostile.CurrentBehavior != AircraftBehavior.TerrainFollowing)
+                    GameSessionLogger.Current?.OnBehaviorChanged(hostile.Id, hostile.Designation, hostile.CurrentBehavior.ToString(), nameof(AircraftBehavior.TerrainFollowing), "hard_lock");
                 hostile.CurrentBehavior = AircraftBehavior.TerrainFollowing;
+            }
         }
     }
 

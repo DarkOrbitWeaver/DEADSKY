@@ -39,7 +39,7 @@ public partial class MainViewModel
         : $"GUIDANCE: {CurrentSnapshot.SelectedWeapon.GuidanceMode.ToString().ToUpperInvariant()}";
     public string SelectedWeaponEnvelopeText => CurrentSnapshot?.SelectedWeapon == null
         ? "ENVELOPE: ---"
-        : $"ENVELOPE: {CurrentSnapshot.SelectedWeapon.MinRangeNm:0.0}-{CurrentSnapshot.SelectedWeapon.MaxRangeNm:0.0}NM | {CurrentSnapshot.SelectedWeapon.MinAltitudeFt:0}-{CurrentSnapshot.SelectedWeapon.MaxAltitudeFt:0}FT";
+        : $"ENVELOPE: {CurrentSnapshot.SelectedWeapon.MinRangeNm * 1.852:0.0}-{CurrentSnapshot.SelectedWeapon.MaxRangeNm * 1.852:0.0}km | {CurrentSnapshot.SelectedWeapon.MinAltitudeFt * 0.3048:0}-{CurrentSnapshot.SelectedWeapon.MaxAltitudeFt * 0.3048:0}m";
     public string SelectedWeaponCountermeasureText => CurrentSnapshot?.SelectedWeapon == null
         ? "COUNTERMEASURES: ---"
         : WeaponCatalog.BuildCountermeasureRiskText(CurrentSnapshot.SelectedWeapon).ToUpperInvariant();
@@ -84,7 +84,7 @@ public partial class MainViewModel
             : "ABORT: WEAPON COMMIT OR NO ABORT PATH";
 
     [RelayCommand(CanExecute = nameof(CanSelectWeapon))]
-    private void SelectWeapon(string weaponId)
+    public void SelectWeapon(string weaponId)
     {
         if (string.IsNullOrWhiteSpace(weaponId))
             return;
@@ -404,8 +404,8 @@ public partial class WeaponOptionViewModel : ObservableObject
         Id = definition.Id;
         DisplayName = $"{definition.ShortCode} // {definition.DisplayName}";
         GuidanceLabel = definition.GuidanceMode.ToString().ToUpperInvariant();
-        RangeLabel = $"{definition.MinRangeNm:0.0}-{definition.MaxRangeNm:0.0}NM";
-        EnvelopeLabel = $"{definition.MinAltitudeFt:0}-{definition.MaxAltitudeFt:0}FT";
+        RangeLabel = $"{definition.MinRangeNm * 1.852:0.0}-{definition.MaxRangeNm * 1.852:0.0}km";
+        EnvelopeLabel = $"{definition.MinAltitudeFt * 0.3048:0}-{definition.MaxAltitudeFt * 0.3048:0}m";
         SupportLabel = definition.RequiresRadarSupport ? "RADAR SUPPORT" : "PASSIVE / IR";
         PkLabel = $"{definition.BaseSingleShotPk:P0} BASE PK";
         CountermeasureLabel = definition.SusceptibleToChaff

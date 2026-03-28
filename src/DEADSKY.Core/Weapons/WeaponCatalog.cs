@@ -88,7 +88,9 @@ public static class WeaponCatalog
 
     public static IReadOnlyList<WeaponDefinition> DefaultLoadout { get; } =
     [
-        Definitions[BaselineSarhWeaponId]
+        Definitions[BaselineSarhWeaponId],
+        Definitions[LongRangeSarhWeaponId],  // Start with long-range unlocked for better gameplay
+        Definitions[ShortRangeIrWeaponId]     // Start with IR unlocked for variety
     ];
 
     public static WeaponDefinition Get(string weaponId)
@@ -130,8 +132,13 @@ public static class WeaponCatalog
 
     public static void EnsureBatteryWeapons(SAMBattery battery)
     {
+        // Start with all weapons unlocked for better gameplay
         if (battery.AvailableWeaponIds.Count == 0)
+        {
             battery.AvailableWeaponIds.Add(BaselineSarhWeaponId);
+            battery.AvailableWeaponIds.Add(LongRangeSarhWeaponId);
+            battery.AvailableWeaponIds.Add(ShortRangeIrWeaponId);
+        }
 
         if (string.IsNullOrWhiteSpace(battery.CurrentWeaponId))
             battery.CurrentWeaponId = battery.AvailableWeaponIds[0];

@@ -17,7 +17,7 @@ public class AIModelClient
     // ── GLOBAL MODEL CONFIGURATION ─────────────────────────────────────
     // Change this one variable to switch models for the entire game.
     public static string ModelIdentifier { get; set; } =
-        Environment.GetEnvironmentVariable("DEADSKY_AI_MODEL") ?? "nvidia/nemotron-3-nano-4b";
+        Environment.GetEnvironmentVariable("DEADSKY_AI_MODEL") ?? "dolphin-2.6-mistral-7b-dpo-laser";
     public static string ApiEndpoint { get; set; } =
         Environment.GetEnvironmentVariable("DEADSKY_AI_ENDPOINT") ?? "http://localhost:1234/v1/chat/completions";
     public static double DefaultTemperature { get; set; } = 0.25;

@@ -18,6 +18,11 @@ public class RadarSystem
     public RadarMode Mode { get; set; } = RadarMode.Search;
     public string? SingleTargetTrackEntityId { get; set; }  // For STT mode
 
+    // Task 5.4: AWACS data fusion multiplier (1.0 = no boost, 1.3 = 30% range boost)
+    // Requirement 4.4: When AWACS is active, apply 30% radar range multiplier.
+    // Requirement 4.5: AWACS must be a distinct airborne entity to provide the boost.
+    public double AwacRangeMultiplier { get; private set; } = 1.0;
+
     // ECM state — currently active jamming
     public List<EcmEffect> ActiveEcmEffects { get; } = new();
 
@@ -56,6 +61,13 @@ public class RadarSystem
 
         double weatherAtten = DetectionEngine.GetWeatherAttenuation(weatherPrecipitationMmHr);
 
+        // Task 5.4: Check for active AWACS entity and set range multiplier.
+        // Requirement 4.4: Apply 30% radar range boost when AWACS is on station.
+        // Requirement 4.5: AWACS must be a distinct airborne friendly entity.
+        bool awacsActive = entities.Any(e =>
+            e is AWACSAircraft && e.IsActive && e.Affiliation == Affiliation.Friendly);
+        AwacRangeMultiplier = awacsActive ? 1.3 : 1.0;
+
         // Process all entities
         foreach (var entity in entities)
         {
@@ -79,9 +91,13 @@ public class RadarSystem
 
             var (bearing, rangeNm) = CoordinateSystem.ToBearingRange(entity.Position);
 
+            // Task 5.4: Apply AWACS range multiplier — divide effective range so detection
+            // probability is calculated as if the target is closer (= extended detection range).
+            double effectiveRangeNm = rangeNm / AwacRangeMultiplier;
+
             var ctx = new DetectionEngine.DetectionContext
             {
-                RangeNm = rangeNm,
+                RangeNm = effectiveRangeNm,
                 TargetAltFt = CoordinateSystem.MToFt(entity.AltitudeM),
                 TargetRcsM2 = entity.RcsM2,
                 TargetECMActive = ecmPower > 0,

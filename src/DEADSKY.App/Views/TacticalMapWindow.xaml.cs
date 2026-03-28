@@ -45,7 +45,7 @@ public partial class TacticalMapWindow : Window
 
     private void UpdateMapZoomReadout(double rangeNm)
     {
-        MapZoomText.Text = $"MAP {rangeNm:0}NM";
+        MapZoomText.Text = $"MAP {rangeNm * 1.852:0}km";
     }
 
     private void OnZoomIn(object sender, RoutedEventArgs e) => MapDisplay.ZoomIn();

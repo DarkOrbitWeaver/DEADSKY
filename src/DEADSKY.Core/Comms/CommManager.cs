@@ -1,4 +1,5 @@
 using DEADSKY.Core.Entities;
+using DEADSKY.Core.Logging;
 using System.Collections.Concurrent;
 
 namespace DEADSKY.Core.Comms;
@@ -10,7 +11,8 @@ public enum RadioChannel
     AirDefenseNet = 3,
     IntelNet = 4,
     Guard = 5,
-    OpenFreq = 6
+    OpenFreq = 6,
+    BatteryNetwork = 7  // Phase 4: Battery-to-battery coordination
 }
 
 public enum MessagePriority
@@ -124,6 +126,8 @@ public record RadioMessage
 
     public string AttentionMarker => RequiresAttention ? $"[{PriorityTag}]" : "";
 
+    public bool IsUrgent => Priority == MessagePriority.Flash || Priority == MessagePriority.Immediate;
+
     private static string ShortenLabel(string? value, int maxLength)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -165,6 +169,7 @@ public class CommManager
         if (_history[message.Channel].Count > MaxHistoryPerChannel)
             _history[message.Channel].RemoveAt(0);
 
+        GameSessionLogger.Current?.OnRadioMessage(message);
         MessageReceived?.Invoke(message);
         if (message.Priority == MessagePriority.Flash)
             FlashMessageReceived?.Invoke(message);

@@ -5,6 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:controls="clr-namespace:DEADSKY.App.Controls"
         xmlns:comms="clr-namespace:DEADSKY.Core.Comms;assembly=DEADSKY.Core"
+        xmlns:converters="clr-namespace:DEADSKY.App.Converters"
         mc:Ignorable="d"
         Title="DEADSKY Command Console"
         Height="980"
@@ -16,6 +17,8 @@
         SnapsToDevicePixels="True">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+        <converters:ThreatColorConverter x:Key="ThreatColorConverter" />
+        <converters:ChannelColorConverter x:Key="ChannelColorConverter" />
     </Window.Resources>
 
     <Grid>
@@ -83,10 +86,11 @@
                     </Grid.RowDefinitions>
                     <Border Grid.Row="0" Style="{StaticResource PanelHeaderStyle}">
                         <DockPanel LastChildFill="False">
-                            <TextBlock Text="TACTICAL SCOPE" Style="{StaticResource HeaderText}" />
+                            <TextBlock Text="TACTICAL SCOPE" Style="{StaticResource HeaderText}" VerticalAlignment="Center" />
                             <Button DockPanel.Dock="Right"
                                     Content="OPEN MAP"
                                     Style="{StaticResource MilButton}"
+                                    VerticalAlignment="Center"
                                     Click="OnOpenTacticalMap"/>
                             <TextBlock DockPanel.Dock="Right"
                                        Text="{Binding RadarCursorReadout}"
@@ -118,43 +122,50 @@
                                       Margin="12,0,0,0"
                                       VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled">
+                            <ScrollViewer.Resources>
+                                <Style TargetType="ScrollBar" BasedOn="{StaticResource {x:Type ScrollBar}}">
+                                    <Setter Property="Width" Value="6"/>
+                                    <Setter Property="Margin" Value="-6,2,0,2"/>
+                                </Style>
+                            </ScrollViewer.Resources>
                             <StackPanel>
-                                <Border Style="{StaticResource MilPanel}" Padding="10" Margin="0,0,0,8">
-                                    <StackPanel>
-                                        <TextBlock Text="SCOPE CONTROL" Style="{StaticResource HeaderText}" />
-                                        <TextBlock Text="{Binding RadarRangeStatusText}" Style="{StaticResource AccentText}" Margin="0,6,0,0" />
-                                        <UniformGrid Rows="2" Columns="2" Margin="0,8,0,0">
-                                            <Button Content="SEARCH" Style="{StaticResource MilButton}" Command="{Binding SetRadarSearchCommand}" ToolTip="Wide-area search sweep for initial detection." />
-                                            <Button Content="TWS" Style="{StaticResource MilButton}" Command="{Binding SetRadarTWSCommand}" Margin="6,0,0,0" ToolTip="Track-while-scan to hold track files while sweeping." />
-                                            <Button Content="SILENT" Style="{StaticResource MilButton}" Command="{Binding SetRadarSilentCommand}" Margin="0,6,0,0" ToolTip="Emission silence for reduced signature." />
-                                            <Button Content="STBY" Style="{StaticResource MilButton}" Command="{Binding SetRadarStandbyCommand}" Margin="6,6,0,0" ToolTip="Radar standby with power still available." />
-                                        </UniformGrid>
-                                        <UniformGrid Rows="1" Columns="3" Margin="0,8,0,0">
-                                            <Button Content="40" Style="{StaticResource MilButton}" Command="{Binding SetRadarRangePresetCommand}" CommandParameter="40" ToolTip="Tight tactical scan for close work." />
-                                            <Button Content="80" Style="{StaticResource MilButton}" Command="{Binding SetRadarRangePresetCommand}" CommandParameter="80" Margin="6,0,0,0" ToolTip="Balanced sector scan." />
-                                            <Button Content="120" Style="{StaticResource MilButton}" Command="{Binding SetRadarRangePresetCommand}" CommandParameter="120" Margin="6,0,0,0" ToolTip="Long-range early warning watch." />
-                                        </UniformGrid>
-                                        <TextBlock Text="{Binding RadarModeText}" Style="{StaticResource PrimaryText}" Margin="0,8,0,0" />
-                                        <TextBlock Text="{Binding TrackHoldStatusText}" Style="{StaticResource SmallText}" Margin="0,4,0,0" />
-                                        <TextBlock Text="{Binding RadarEmissionText}" Style="{StaticResource SmallText}" Margin="0,2,0,0" />
-                                        <TextBlock Text="{Binding RadarSweepText}" Style="{StaticResource SubtleText}" Margin="0,2,0,0" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Style="{StaticResource MilPanel}" Padding="10" Margin="0,0,0,8">
-                                    <StackPanel>
-                                        <TextBlock Text="FIRE CONTROL" Style="{StaticResource HeaderText}" />
-                                        <TextBlock Text="{Binding FireControlHeadlineText}" Style="{StaticResource WarningText}" Margin="0,8,0,0" />
-                                        <TextBlock Text="{Binding FireControlSummaryText}" Style="{StaticResource AccentText}" Margin="0,6,0,0" TextWrapping="Wrap" />
-                                        <TextBlock Text="{Binding FireControlDetailText}" Style="{StaticResource SmallText}" Margin="0,4,0,0" TextWrapping="Wrap" />
-                                        <TextBlock Text="{Binding FireControlSupportText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,8,0,0" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Style="{StaticResource MilPanel}" Padding="10" Margin="0,0,0,8">
-                                    <StackPanel>
-                                        <TextBlock Text="LOADOUT MANAGEMENT" Style="{StaticResource SectionKicker}" />
-                                        <TextBlock Text="WEAPONS / LOADOUT" Style="{StaticResource HeaderText}" Margin="0,2,0,0" />
-                                        <TextBlock Text="{Binding WeaponLoadoutSummaryText}" Style="{StaticResource PrimaryText}" Margin="0,8,0,0" TextWrapping="Wrap" />
-                                        <WrapPanel Margin="0,8,0,0">
+                                <controls:CollapsibleSection Header="SCOPE CONTROL" SectionId="ScopeControl" IsExpanded="{Binding IsScopeControlExpanded, Mode=TwoWay}" Margin="0,0,0,16">
+                                    <controls:CollapsibleSection.SectionContent>
+                                        <StackPanel Margin="16">
+                                            <TextBlock Text="{Binding RadarRangeStatusText}" Style="{StaticResource AccentText}" Margin="0,6,0,0" />
+                                            <UniformGrid Rows="2" Columns="2" Margin="0,8,0,0">
+                                                <Button Content="SEARCH" Style="{StaticResource MilButton}" Command="{Binding SetRadarSearchCommand}" ToolTip="Wide-area search sweep for initial detection." />
+                                                <Button Content="TWS" Style="{StaticResource MilButton}" Command="{Binding SetRadarTWSCommand}" Margin="10,0,0,0" ToolTip="Track-while-scan to hold track files while sweeping." />
+                                                <Button Content="SILENT" Style="{StaticResource MilButton}" Command="{Binding SetRadarSilentCommand}" Margin="0,10,0,0" ToolTip="Emission silence for reduced signature." />
+                                                <Button Content="STBY" Style="{StaticResource MilButton}" Command="{Binding SetRadarStandbyCommand}" Margin="10,10,0,0" ToolTip="Radar standby with power still available." />
+                                            </UniformGrid>
+                                            <UniformGrid Rows="1" Columns="3" Margin="0,8,0,0">
+                                                <Button Content="40" Style="{StaticResource MilButton}" Command="{Binding SetRadarRangePresetCommand}" CommandParameter="40" ToolTip="Tight tactical scan for close work." />
+                                                <Button Content="80" Style="{StaticResource MilButton}" Command="{Binding SetRadarRangePresetCommand}" CommandParameter="80" Margin="10,0,0,0" ToolTip="Balanced sector scan." />
+                                                <Button Content="120" Style="{StaticResource MilButton}" Command="{Binding SetRadarRangePresetCommand}" CommandParameter="120" Margin="10,0,0,0" ToolTip="Long-range early warning watch." />
+                                            </UniformGrid>
+                                            <TextBlock Text="{Binding RadarModeText}" Style="{StaticResource PrimaryText}" Margin="0,8,0,0" />
+                                            <TextBlock Text="{Binding TrackHoldStatusText}" Style="{StaticResource SmallText}" Margin="0,8,12,0" />
+                                            <TextBlock Text="{Binding RadarEmissionText}" Style="{StaticResource SmallText}" Margin="0,2,0,0" />
+                                            <TextBlock Text="{Binding RadarSweepText}" Style="{StaticResource SubtleText}" Margin="0,2,0,0" />
+                                        </StackPanel>
+                                    </controls:CollapsibleSection.SectionContent>
+                                </controls:CollapsibleSection>
+                                <controls:CollapsibleSection Header="FIRE CONTROL" SectionId="FireControl" IsExpanded="{Binding IsFireControlExpanded, Mode=TwoWay}" Margin="0,0,0,16">
+                                    <controls:CollapsibleSection.SectionContent>
+                                        <StackPanel Margin="16">
+                                            <TextBlock Text="{Binding FireControlHeadlineText}" Style="{StaticResource WarningText}" Margin="0,12,12,0" />
+                                            <TextBlock Text="{Binding FireControlSummaryText}" Style="{StaticResource AccentText}" Margin="0,12,12,0" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding FireControlDetailText}" Style="{StaticResource SmallText}" Margin="0,12,12,0" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding FireControlSupportText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,12,12,0" />
+                                        </StackPanel>
+                                    </controls:CollapsibleSection.SectionContent>
+                                </controls:CollapsibleSection>
+                                <controls:CollapsibleSection Header="WEAPONS / LOADOUT" SectionId="WeaponsLoadout" IsExpanded="{Binding IsWeaponsLoadoutExpanded, Mode=TwoWay}" Margin="0,0,0,16">
+                                    <controls:CollapsibleSection.SectionContent>
+                                    <StackPanel Margin="16">
+                                        <TextBlock Text="{Binding WeaponLoadoutSummaryText}" Style="{StaticResource PrimaryText}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                                        <WrapPanel Margin="0,6,0,0">
                                             <Border Style="{StaticResource ChipBorder}" Background="#112231" BorderBrush="{StaticResource CardAccentBlueBrush}">
                                                 <TextBlock Text="{Binding SelectedWeaponGuidanceText}" Style="{StaticResource ChipText}" />
                                             </Border>
@@ -166,75 +177,88 @@
                                             </Border>
                                         </WrapPanel>
                                         <TextBlock Text="{Binding SelectedWeaponEnvelopeText}" Style="{StaticResource SmallText}" Margin="0,6,0,0" TextWrapping="Wrap" />
-                                        <TextBlock Text="{Binding SelectedWeaponSupportText}" Style="{StaticResource SmallText}" Margin="0,3,0,0" TextWrapping="Wrap" />
-                                        <TextBlock Text="{Binding SelectedWeaponCountermeasureText}" Style="{StaticResource SmallText}" Margin="0,3,0,0" TextWrapping="Wrap" />
-                                        <TextBlock Text="{Binding WeaponRecommendationText}" Style="{StaticResource AccentText}" Margin="0,8,0,0" TextWrapping="Wrap" />
-                                        <TextBlock Text="{Binding WeaponActionStatusText}" Style="{StaticResource SmallText}" Margin="0,4,0,0" TextWrapping="Wrap" />
-                                        <TextBlock Text="{Binding FriendlyFireRiskText}" Style="{StaticResource WarningText}" Margin="0,6,0,0" TextWrapping="Wrap" />
-                                        <TextBlock Text="{Binding SelectedWeaponDescriptionText}" Style="{StaticResource SubtleText}" Margin="0,8,0,0" TextWrapping="Wrap" />
-                                        <ItemsControl ItemsSource="{Binding WeaponOptions}" Margin="0,10,0,0">
+                                        <TextBlock Text="{Binding WeaponRecommendationText}" Style="{StaticResource AccentText}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                                        <ItemsControl ItemsSource="{Binding WeaponOptions}" Margin="0,8,0,0">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Border x:Name="WeaponCard"
-                                                            Style="{StaticResource MilInsetCard}"
-                                                            Margin="0,0,0,6"
+                                                    <Border Margin="0,0,0,10"
                                                             ToolTip="{Binding Tooltip}">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border" BasedOn="{StaticResource MilInsetCard}">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                                        <Setter Property="BorderBrush" Value="{StaticResource CardAccentBlueBrush}" />
+                                                                        <Setter Property="Background" Value="#102131" />
+                                                                    </DataTrigger>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Trigger.EnterActions>
+                                                                            <BeginStoryboard>
+                                                                                <Storyboard>
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="(Border.Effect).(DropShadowEffect.ShadowDepth)"
+                                                                                                     From="0"
+                                                                                                     To="0"
+                                                                                                     Duration="0:0:0.01"/>
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="(Border.Effect).(DropShadowEffect.BlurRadius)"
+                                                                                                     From="0"
+                                                                                                     To="12"
+                                                                                                     Duration="0:0:0.01"/>
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="(Border.Effect).(DropShadowEffect.Opacity)"
+                                                                                                     From="0"
+                                                                                                     To="0.6"
+                                                                                                     Duration="0:0:0.01"/>
+                                                                                </Storyboard>
+                                                                            </BeginStoryboard>
+                                                                        </Trigger.EnterActions>
+                                                                        <Trigger.ExitActions>
+                                                                            <BeginStoryboard>
+                                                                                <Storyboard>
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="(Border.Effect).(DropShadowEffect.BlurRadius)"
+                                                                                                     From="12"
+                                                                                                     To="0"
+                                                                                                     Duration="0:0:0.01"/>
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="(Border.Effect).(DropShadowEffect.Opacity)"
+                                                                                                     From="0.6"
+                                                                                                     To="0"
+                                                                                                     Duration="0:0:0.01"/>
+                                                                                </Storyboard>
+                                                                            </BeginStoryboard>
+                                                                        </Trigger.ExitActions>
+                                                                    </Trigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+                                                        <Border.Effect>
+                                                            <DropShadowEffect Color="#6AA9D8" 
+                                                                              ShadowDepth="0" 
+                                                                              BlurRadius="0" 
+                                                                              Opacity="0"/>
+                                                        </Border.Effect>
                                                         <StackPanel>
-                                                            <DockPanel LastChildFill="False">
-                                                                <TextBlock Text="{Binding DisplayName}" Style="{StaticResource PrimaryText}" />
-                                                                <Border DockPanel.Dock="Right"
-                                                                        Style="{StaticResource ChipBorder}"
-                                                                        Background="#132231"
-                                                                        BorderBrush="{StaticResource CardAccentBlueBrush}"
-                                                                        Margin="8,0,0,0">
-                                                                    <TextBlock Text="{Binding RangeLabel}" Style="{StaticResource ChipText}" />
-                                                                </Border>
-                                                            </DockPanel>
-                                                            <WrapPanel Margin="0,6,0,0">
+                                                            <TextBlock Text="{Binding DisplayName}" Style="{StaticResource PrimaryText}" />
+                                                            <WrapPanel Margin="0,4,0,0">
                                                                 <Border Style="{StaticResource ChipBorder}" Background="#152317" BorderBrush="{StaticResource CardAccentGreenBrush}">
                                                                     <TextBlock Text="{Binding GuidanceLabel}" Style="{StaticResource ChipText}" />
                                                                 </Border>
-                                                                <Border Style="{StaticResource ChipBorder}" Background="#221A10" BorderBrush="{StaticResource CardAccentAmberBrush}">
-                                                                    <TextBlock Text="{Binding SupportLabel}" Style="{StaticResource ChipText}" />
-                                                                </Border>
                                                                 <Border Style="{StaticResource ChipBorder}" Background="#141A21" BorderBrush="{StaticResource PanelBorderBrush}">
-                                                                    <TextBlock Text="{Binding PkLabel}" Style="{StaticResource ChipText}" />
+                                                                    <TextBlock Text="{Binding RangeLabel}" Style="{StaticResource ChipText}" />
                                                                 </Border>
                                                             </WrapPanel>
-                                                            <TextBlock Text="{Binding EnvelopeLabel}" Style="{StaticResource SmallText}" Margin="0,4,0,0" />
-                                                            <TextBlock Text="{Binding CountermeasureLabel}" Style="{StaticResource SmallText}" Margin="0,2,0,0" />
-                                                            <TextBlock Text="{Binding Description}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,4,0,0" />
                                                             <Button Content="{Binding SelectLabel}"
                                                                     Style="{StaticResource MilButton}"
-                                                                    Margin="0,8,0,0"
+                                                                    Margin="0,6,0,0"
                                                                     Command="{Binding DataContext.SelectWeaponCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                     CommandParameter="{Binding Id}"/>
                                                         </StackPanel>
                                                     </Border>
-                                                    <DataTemplate.Triggers>
-                                                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                            <Setter TargetName="WeaponCard" Property="BorderBrush" Value="{StaticResource CardAccentBlueBrush}" />
-                                                            <Setter TargetName="WeaponCard" Property="Background" Value="#102131" />
-                                                        </DataTrigger>
-                                                    </DataTemplate.Triggers>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
-                                        <Border Style="{StaticResource MilInsetCard}" Margin="0,10,0,0" BorderBrush="{StaticResource CardAccentAmberBrush}">
-                                            <StackPanel>
-                                                <TextBlock Text="{Binding AbortAvailabilityText}" Style="{StaticResource WarningText}" TextWrapping="Wrap" />
-                                                <TextBlock Text="{Binding RecentIncidentSummaryText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                                            </StackPanel>
-                                        </Border>
-                                        <Button Content="ABORT ENGAGEMENT"
-                                                Style="{StaticResource MilButton}"
-                                                Command="{Binding AbortSelectedTrackCommand}"
-                                                Margin="0,8,0,0"
-                                                ToolTip="Abort supported missiles already in flight against the selected track when the weapon allows it." />
                                     </StackPanel>
-                                </Border>
-                                <Border Style="{StaticResource MilPanel}" Padding="10">
-                                    <StackPanel>
+                                    </controls:CollapsibleSection.SectionContent>
+                                </controls:CollapsibleSection>
+                                <controls:CollapsibleSection Header="ENGAGEMENT CONTROL" SectionId="EngagementControl" IsExpanded="{Binding IsEngagementControlExpanded, Mode=TwoWay}">
+                                    <controls:CollapsibleSection.SectionContent>
+                                    <StackPanel Margin="16">
                                         <TextBlock Text="ENGAGEMENT CONTROL" Style="{StaticResource SectionKicker}" />
                                         <TextBlock Text="{Binding SelectedTrackPanelTitle}" Style="{StaticResource HeaderText}" />
                                         <TextBlock Text="{Binding SelectedTrackThreatText}" Style="{StaticResource WarningText}" Margin="0,8,0,0" />
@@ -257,13 +281,13 @@
                                         </TextBlock>
                                         <StackPanel Visibility="{Binding HasSelectedTrack, Converter={StaticResource BoolToVisibilityConverter}}">
                                         <WrapPanel Margin="0,6,0,0">
-                                            <Border Style="{StaticResource ChipBorder}" Background="#132231" BorderBrush="{StaticResource CardAccentBlueBrush}">
+                                            <Border Style="{StaticResource ChipBorder}" Background="#132231" BorderBrush="{StaticResource CardAccentBlueBrush}" Margin="0,0,8,8">
                                                 <TextBlock Text="{Binding SelectedTrackBraa}" Style="{StaticResource ChipText}" />
                                             </Border>
-                                            <Border Style="{StaticResource ChipBorder}" Background="#20140F" BorderBrush="{StaticResource CardAccentAmberBrush}">
+                                            <Border Style="{StaticResource ChipBorder}" Background="#20140F" BorderBrush="{StaticResource CardAccentAmberBrush}" Margin="0,0,8,8">
                                                 <TextBlock Text="{Binding SelectedTrackTimeToThreatText}" Style="{StaticResource ChipText}" />
                                             </Border>
-                                            <Border Style="{StaticResource ChipBorder}" Background="#182114" BorderBrush="{StaticResource CardAccentGreenBrush}">
+                                            <Border Style="{StaticResource ChipBorder}" Background="#182114" BorderBrush="{StaticResource CardAccentGreenBrush}" Margin="0,0,8,8">
                                                 <TextBlock Text="{Binding SelectedTrackEnvelopeText}" Style="{StaticResource ChipText}" />
                                             </Border>
                                         </WrapPanel>
@@ -295,6 +319,17 @@
                                             <Button Content="SALVO x2" Style="{StaticResource EngageButton}" Command="{Binding FireSalvoCommand}" Margin="6,0,0,0" ToolTip="Fire two missiles quickly at the same target for a higher kill chance." />
                                         </WrapPanel>
                                         <TextBlock Text="{Binding EngagementActionHintText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                                        <Border Style="{StaticResource MilInsetCard}" Margin="0,10,0,0" BorderBrush="{StaticResource CardAccentAmberBrush}">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding AbortAvailabilityText}" Style="{StaticResource WarningText}" TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding RecentIncidentSummaryText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                            </StackPanel>
+                                        </Border>
+                                        <Button Content="ABORT ENGAGEMENT"
+                                                Style="{StaticResource MilButton}"
+                                                Command="{Binding AbortSelectedTrackCommand}"
+                                                Margin="0,8,0,0"
+                                                ToolTip="Abort supported missiles already in flight against the selected track when the weapon allows it." />
                                         </StackPanel>
                                         <ItemsControl ItemsSource="{Binding LauncherStates}" Margin="0,10,0,0">
                                             <ItemsControl.ItemTemplate>
@@ -317,7 +352,8 @@
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
                                     </StackPanel>
-                                </Border>
+                                    </controls:CollapsibleSection.SectionContent>
+                                </controls:CollapsibleSection>
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>
@@ -330,8 +366,9 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <Border Grid.Row="0" Style="{StaticResource MilPanel}" Padding="10" Margin="0,0,0,10">
-                    <StackPanel>
+                <controls:CollapsibleSection Header="MISSION BOARD" SectionId="MissionBoard" IsExpanded="{Binding IsMissionBoardExpanded, Mode=TwoWay}" Margin="0,0,0,10">
+                    <controls:CollapsibleSection.SectionContent>
+                    <StackPanel Margin="0,0,0,0">
                         <TextBlock Text="LIVE OPERATING PICTURE" Style="{StaticResource SectionKicker}"/>
                         <DockPanel LastChildFill="False" Margin="0,2,0,0">
                             <TextBlock Text="MISSION BOARD" Style="{StaticResource HeaderText}"/>
@@ -343,44 +380,62 @@
                             </Border>
                         </DockPanel>
                         <UniformGrid Rows="1" Columns="4" Margin="0,10,0,0">
-                            <Border Style="{StaticResource MilMetricCard}" Margin="0,0,6,0">
+                            <Border Margin="0,0,10,0" Padding="12">
+                                <Border.Style>
+                                    <Style TargetType="Border" BasedOn="{StaticResource MilMetricCard}">
+                                        <Setter Property="Background" Value="#0A1A0A"/>
+                                        <Setter Property="BorderBrush" Value="{StaticResource CardAccentGreenBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding AlertLevelText}" Value="YELLOW">
+                                                <Setter Property="Background" Value="#1A1A0A"/>
+                                                <Setter Property="BorderBrush" Value="{StaticResource CardAccentAmberBrush}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding AlertLevelText}" Value="RED">
+                                                <Setter Property="Background" Value="#1A0A0A"/>
+                                                <Setter Property="BorderBrush" Value="{StaticResource CardAccentRedBrush}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding AlertLevelText}" Value="BLACK">
+                                                <Setter Property="Background" Value="#0A0A0A"/>
+                                                <Setter Property="BorderBrush" Value="#6A1E1E"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
                                 <StackPanel>
                                     <TextBlock Text="ALERT" Style="{StaticResource MetricLabelText}"/>
-                                    <TextBlock Text="{Binding AlertLevelText}" Style="{StaticResource MetricValueText}" Margin="0,4,0,0"/>
-                                    <TextBlock Text="{Binding FireControlHeadlineText}" Style="{StaticResource SmallText}" Margin="0,4,0,0"/>
+                                    <TextBlock Text="{Binding AlertLevelText}" Style="{StaticResource MetricValueText}" FontSize="18" Margin="0,8,0,0"/>
+                                    <TextBlock Text="{Binding BatteryROE}" Style="{StaticResource SmallText}" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </Border>
-                            <Border Style="{StaticResource MilMetricCard}" Margin="0,0,6,0">
+                            <Border Style="{StaticResource MilMetricCard}" Margin="0,0,10,0" Padding="12" Background="#0A120A">
                                 <StackPanel>
                                     <TextBlock Text="READY" Style="{StaticResource MetricLabelText}"/>
-                                    <TextBlock Text="{Binding ReadyLaunchers}" Style="{StaticResource MetricValueText}" Margin="0,4,0,0"/>
-                                    <TextBlock Text="{Binding BatteryLaunchStatusText}" Style="{StaticResource SmallText}" Margin="0,4,0,0"/>
+                                    <TextBlock Text="{Binding ReadyLaunchers}" Style="{StaticResource MetricValueText}" FontSize="18" Margin="0,8,0,0"/>
+                                    <TextBlock Text="LAUNCHERS" Style="{StaticResource SmallText}" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </Border>
-                            <Border Style="{StaticResource MilMetricCard}" Margin="0,0,6,0">
+                            <Border Style="{StaticResource MilMetricCard}" Margin="0,0,10,0" Padding="12" Background="#0A1A0A">
                                 <StackPanel>
                                     <TextBlock Text="MAGAZINE" Style="{StaticResource MetricLabelText}"/>
-                                    <TextBlock Text="{Binding ReserveMissiles}" Style="{StaticResource MetricValueText}" Margin="0,4,0,0"/>
-                                    <TextBlock Text="RESERVE MISSILES" Style="{StaticResource SmallText}" Margin="0,4,0,0"/>
+                                    <TextBlock Text="{Binding ReserveMissiles}" Style="{StaticResource MetricValueText}" FontSize="18" Margin="0,8,0,0"/>
+                                    <TextBlock Text="RESERVE" Style="{StaticResource SmallText}" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </Border>
-                            <Border Style="{StaticResource MilMetricCard}">
+                            <Border Style="{StaticResource MilMetricCard}" Padding="12" Background="#0A120A">
                                 <StackPanel>
                                     <TextBlock Text="THREATS" Style="{StaticResource MetricLabelText}"/>
-                                    <TextBlock Text="{Binding HostileCount}" Style="{StaticResource MetricValueText}" Margin="0,4,0,0"/>
+                                    <TextBlock Text="{Binding HostileCount}" Style="{StaticResource MetricValueText}" FontSize="18" Margin="0,8,0,0"/>
                                     <TextBlock Text="{Binding ThreatSummaryText}" Style="{StaticResource SmallText}" Margin="0,4,0,0" TextWrapping="Wrap"/>
                                 </StackPanel>
                             </Border>
                         </UniformGrid>
-                        <Border Style="{StaticResource MilAccentCard}" Margin="0,10,0,0" BorderBrush="{StaticResource CardAccentBlueBrush}">
+                        <Border Style="{StaticResource MilAccentCard}" Margin="0,10,0,0" Padding="12" BorderBrush="{StaticResource CardAccentBlueBrush}">
                             <StackPanel>
                                 <TextBlock Text="SECTOR POSTURE" Style="{StaticResource SectionKicker}"/>
                                 <TextBlock Text="{Binding AirPictureText}" Style="{StaticResource PrimaryText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                <TextBlock Text="{Binding PackageSummaryText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                <TextBlock Text="{Binding RecommendationText}" Style="{StaticResource PrimaryText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                <TextBlock Text="{Binding IncomingThreatText}" Style="{StaticResource CriticalText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
-                                <TextBlock Text="{Binding ObjectiveStatusText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
-                                <TextBlock Text="{Binding ObjectiveBoardText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                <TextBlock Text="{Binding RecommendationText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                <TextBlock Text="{Binding IncomingThreatText}" Style="{StaticResource CriticalText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                <TextBlock Text="{Binding ObjectiveStatusText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                                 <TextBlock Text="{Binding SectorEventText}" Style="{StaticResource WarningText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                             </StackPanel>
                         </Border>
@@ -392,57 +447,59 @@
                             <Border Grid.Column="0" Style="{StaticResource MilInsetCard}" Margin="0,0,6,0">
                                 <StackPanel>
                                     <TextBlock Text="SUPPORT PICTURE" Style="{StaticResource SectionKicker}"/>
-                                    <TextBlock Text="{Binding SupportActivitySummaryText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                                     <TextBlock Text="{Binding CommandConfidenceText}" Style="{StaticResource AccentText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                    <TextBlock Text="{Binding SupportConsequenceText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                    <Border Style="{StaticResource ChipBorder}" Background="#132231" BorderBrush="{StaticResource CardAccentBlueBrush}" Margin="0,6,0,0">
-                                        <TextBlock Text="{Binding SupportRecommendationText}" Style="{StaticResource ChipText}" TextWrapping="Wrap"/>
-                                    </Border>
-                                    <TextBlock Text="{Binding VisibleSupportPictureText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                    <ItemsControl ItemsSource="{Binding SupportPackages}" Margin="0,8,0,0">
+                                    <ItemsControl ItemsSource="{Binding SupportPackages}" Margin="0,10,0,0">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Border Style="{StaticResource MilInsetCard}" Margin="0,0,0,6" Padding="8,6">
+                                                <Border Style="{StaticResource MilInsetCard}" 
+                                                        Margin="0,0,0,8" 
+                                                        Padding="10,8"
+                                                        Background="#0A1214"
+                                                        BorderBrush="{StaticResource CardAccentBlueBrush}"
+                                                        BorderThickness="1"
+                                                        CornerRadius="3">
+                                                    <Border.ToolTip>
+                                                        <ToolTip>
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding DisplayName}" FontWeight="Bold" Margin="0,0,0,4"/>
+                                                                <TextBlock Text="{Binding PositionText}" Margin="0,0,0,2"/>
+                                                                <TextBlock Text="{Binding StatusText}" Margin="0,0,0,4"/>
+                                                                <TextBlock Text="Use radio to task this unit" FontStyle="Italic" Foreground="#88AACC"/>
+                                                            </StackPanel>
+                                                        </ToolTip>
+                                                    </Border.ToolTip>
                                                     <StackPanel>
-                                                        <DockPanel LastChildFill="False">
-                                                            <TextBlock Text="{Binding DisplayName}" Style="{StaticResource AccentText}" />
-                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding StatusText}" Style="{StaticResource SmallText}" />
+                                                        <DockPanel LastChildFill="False" Margin="0,0,0,4">
+                                                            <TextBlock Text="{Binding DisplayName}" 
+                                                                      Style="{StaticResource AccentText}" 
+                                                                      FontWeight="SemiBold"
+                                                                      FontSize="13"/>
+                                                            <TextBlock DockPanel.Dock="Right" 
+                                                                      Text="{Binding StatusText}" 
+                                                                      Style="{StaticResource SmallText}"
+                                                                      Foreground="#88AACC"/>
                                                         </DockPanel>
-                                                        <TextBlock Text="{Binding PositionText}" Style="{StaticResource SmallText}" Margin="0,4,0,0" />
-                                                        <TextBlock Text="{Binding DetailText}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                                        <TextBlock Text="{Binding PositionText}" 
+                                                                  Style="{StaticResource SmallText}" 
+                                                                  Foreground="#99AABB"
+                                                                  Margin="0,0,0,0" />
                                                     </StackPanel>
                                                 </Border>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
-                                    <TextBlock Text="{Binding WeatherSummary}" Style="{StaticResource SubtleText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
                                 </StackPanel>
                             </Border>
                             <Border Grid.Column="1" Style="{StaticResource MilInsetCard}" Margin="6,0,0,0">
                                 <StackPanel>
-                                    <TextBlock Text="{Binding RecentIncidentHeadlineText}" Style="{StaticResource SectionKicker}"/>
+                                    <TextBlock Text="CONSEQUENCE FEED" Style="{StaticResource SectionKicker}"/>
                                     <TextBlock Text="{Binding RecentIncidentSummaryText}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                    <ItemsControl ItemsSource="{Binding RecentIncidentCards}" Margin="0,8,0,0">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <Border Style="{StaticResource MilInsetCard}" Margin="0,0,0,6" Padding="8,6">
-                                                    <StackPanel>
-                                                        <DockPanel LastChildFill="False">
-                                                            <TextBlock Text="{Binding Title}" Style="{StaticResource AccentText}"/>
-                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding TimeText}" Style="{StaticResource SmallText}"/>
-                                                        </DockPanel>
-                                                        <TextBlock Text="{Binding SeverityLabel}" Style="{StaticResource WarningText}" Margin="0,4,0,0"/>
-                                                        <TextBlock Text="{Binding Summary}" Style="{StaticResource SmallText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                                    </StackPanel>
-                                                </Border>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
                                 </StackPanel>
                             </Border>
                         </Grid>
                     </StackPanel>
-                </Border>
+                    </controls:CollapsibleSection.SectionContent>
+                </controls:CollapsibleSection>
 
                 <Border Grid.Row="1" Style="{StaticResource MilPanel}">
                     <Grid>
@@ -466,25 +523,69 @@
                                   VirtualizingPanel.IsVirtualizing="True"
                                   VirtualizingPanel.VirtualizationMode="Recycling"
                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="Padding" Value="0"/>
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListViewItem">
+                                                <ContentPresenter/>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListView.ItemContainerStyle>
                             <ListView.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Margin="0,0,0,4"
-                                            Padding="7,5"
+                                    <Border Margin="0,0,0,8"
+                                            Padding="10,8"
                                             Background="#0B141B"
-                                            BorderBrush="{Binding RowBrush}"
+                                            BorderBrush="{Binding Converter={StaticResource ThreatColorConverter}}"
                                             BorderThickness="1"
                                             CornerRadius="4">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Trigger.EnterActions>
+                                                            <BeginStoryboard>
+                                                                <Storyboard>
+                                                                    <ColorAnimation Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                                                    To="#0F1A24"
+                                                                                    Duration="0:0:0.01"/>
+                                                                </Storyboard>
+                                                            </BeginStoryboard>
+                                                        </Trigger.EnterActions>
+                                                        <Trigger.ExitActions>
+                                                            <BeginStoryboard>
+                                                                <Storyboard>
+                                                                    <ColorAnimation Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                                                    To="#0B141B"
+                                                                                    Duration="0:0:0.01"/>
+                                                                </Storyboard>
+                                                            </BeginStoryboard>
+                                                        </Trigger.ExitActions>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
                                         <Grid>
                                             <Grid.RowDefinitions>
                                                 <RowDefinition Height="Auto"/>
                                                 <RowDefinition Height="Auto"/>
                                             </Grid.RowDefinitions>
                                             <DockPanel LastChildFill="False">
-                                                <TextBlock Text="{Binding TrackId}" Style="{StaticResource SmallText}" Foreground="{Binding RowBrush}" FontWeight="Bold"/>
+                                                <TextBlock Text="{Binding TrackId}" Style="{StaticResource SmallText}" Foreground="{Binding Converter={StaticResource ThreatColorConverter}}" FontWeight="Bold"/>
                                                 <TextBlock Text="{Binding Callout}" Style="{StaticResource SmallText}" Margin="8,0,0,0" Foreground="{Binding RowBrush}"/>
-                                                <TextBlock DockPanel.Dock="Right" Text="{Binding ThreatText}" Style="{StaticResource WarningText}" />
+                                                <Border DockPanel.Dock="Right" 
+                                                        Background="{Binding Converter={StaticResource ThreatColorConverter}}"
+                                                        Padding="6,2"
+                                                        CornerRadius="3">
+                                                    <TextBlock Text="{Binding ThreatText}" Style="{StaticResource WarningText}" Foreground="White" FontWeight="Bold" />
+                                                </Border>
                                             </DockPanel>
-                                            <Grid Grid.Row="1" Margin="0,4,0,0">
+                                            <Grid Grid.Row="1" Margin="0,6,0,0">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*"/>
                                                     <ColumnDefinition Width="Auto"/>
@@ -625,12 +726,12 @@
                                             <DataTemplate>
                                                 <Border x:Name="Bubble"
                                                         HorizontalAlignment="Stretch"
-                                                        Padding="8,6"
+                                                        Padding="12,8"
                                                         Background="#0E171E"
-                                                        BorderBrush="{Binding HeaderColorHex}"
+                                                        BorderBrush="{Binding Channel, Converter={StaticResource ChannelColorConverter}}"
                                                         BorderThickness="1"
                                                         CornerRadius="8"
-                                                        Margin="0,0,0,6"
+                                                        Margin="0,0,0,10"
                                                         ToolTip="{Binding DisplayHeader}">
                                                     <StackPanel>
                                                         <Grid>
@@ -661,6 +762,28 @@
                                                     <DataTrigger Binding="{Binding IsFromPlayer}" Value="True">
                                                         <Setter TargetName="Bubble" Property="Background" Value="#132230" />
                                                         <Setter TargetName="Bubble" Property="BorderBrush" Value="#4D8EC0" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsUrgent}" Value="True">
+                                                        <DataTrigger.EnterActions>
+                                                            <BeginStoryboard>
+                                                                <Storyboard>
+                                                                    <DoubleAnimation Storyboard.TargetName="Bubble"
+                                                                                     Storyboard.TargetProperty="(Border.BorderBrush).(SolidColorBrush.Opacity)"
+                                                                                     From="1.0"
+                                                                                     To="0.3"
+                                                                                     Duration="0:0:0.5"
+                                                                                     AutoReverse="True"
+                                                                                     RepeatBehavior="6x" />
+                                                                    <ThicknessAnimation Storyboard.TargetName="Bubble"
+                                                                                        Storyboard.TargetProperty="BorderThickness"
+                                                                                        From="1"
+                                                                                        To="2"
+                                                                                        Duration="0:0:0.5"
+                                                                                        AutoReverse="True"
+                                                                                        RepeatBehavior="6x" />
+                                                                </Storyboard>
+                                                            </BeginStoryboard>
+                                                        </DataTrigger.EnterActions>
                                                     </DataTrigger>
                                                 </DataTemplate.Triggers>
                                             </DataTemplate>
@@ -962,3 +1085,4 @@
         </Grid>
     </Grid>
 </Window>
+

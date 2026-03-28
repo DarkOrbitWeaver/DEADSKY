@@ -45,4 +45,11 @@ public sealed class SimulationSnapshot
     public double RadarRangeNm { get; init; }
     public RadarMode RadarMode { get; init; } = RadarMode.Search;
     public WeatherState Weather { get; init; } = new();
+    
+    // Phase 4: Battery Network Status
+    public string BatteryNetworkStatus { get; init; } = "BATTERY NETWORK: OFFLINE";
+    public int ActiveBatteryCount { get; init; }
+    public int SilentBatteryCount { get; init; }
+    public int ARMThreatCount { get; init; }
+    public string? NetworkCoordinator { get; init; }
 }

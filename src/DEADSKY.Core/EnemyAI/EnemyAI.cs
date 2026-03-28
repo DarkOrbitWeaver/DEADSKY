@@ -1,5 +1,6 @@
 using System.Text;
 using DEADSKY.Core.Entities;
+using DEADSKY.Core.Logging;
 
 namespace DEADSKY.Core.EnemyAI;
 
@@ -128,7 +129,7 @@ public sealed class GroupTacticManager
                 continue;
 
             aircraft.GroupId = group.GroupId;
-            aircraft.CurrentBehavior = group.Tactic switch
+            var next = group.Tactic switch
             {
                 GroupTactic.PincerAttack => AircraftBehavior.IngressAttack,
                 GroupTactic.FeintAndStrike => aircraft.FormationSlot == 0 ? AircraftBehavior.Feint : AircraftBehavior.IngressAttack,
@@ -141,6 +142,11 @@ public sealed class GroupTacticManager
                 GroupTactic.TimeOnTarget => AircraftBehavior.OrbitPatrol,
                 _ => AircraftBehavior.IngressAttack
             };
+            if (aircraft.CurrentBehavior != next)
+                GameSessionLogger.Current?.OnBehaviorChanged(aircraft.Id, aircraft.Designation,
+                    aircraft.CurrentBehavior.ToString(), next.ToString(),
+                    $"ai_cmd tactic={group.Tactic} group={group.GroupId}");
+            aircraft.CurrentBehavior = next;
         }
     }
 }

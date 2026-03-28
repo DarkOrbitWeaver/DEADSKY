@@ -22,22 +22,22 @@ public enum TrackQuality
 
 /// <summary>
 /// A track file represents what the radar system knows about ONE contact.
-/// This is NOT the entity itself — it's the radar picture of the entity.
+/// This is NOT the entity itself â€” it's the radar picture of the entity.
 /// Tracks can have inaccuracy, uncertainty, ghost contacts, and be lost.
 /// </summary>
 public class TrackFile
 {
-    // ── Identity ──────────────────────────────────────────────────────
+    // â”€â”€ Identity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     public string TrackId { get; init; } = "";       // "TRK-0001"
     public string? EntityId { get; set; }             // Actual entity ID (null = ghost)
     public string TrackDesignation { get; set; } = "UNKNOWN"; // Best guess aircraft type
     public string GroupLabel { get; set; } = "UNATTRIBUTED";
 
-    // ── Classification ─────────────────────────────────────────────────
+    // â”€â”€ Classification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     public TrackClassification Classification { get; set; } = TrackClassification.Unknown;
     public double ClassificationConfidence { get; set; } // 0-1
 
-    // ── Position (what radar THINKS the entity is) ────────────────────
+    // â”€â”€ Position (what radar THINKS the entity is) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     public Vec2 Position { get; set; }          // Last known position (with noise added)
     public double AltitudeM { get; set; }
     public double HeadingDeg { get; set; }
@@ -47,12 +47,12 @@ public class TrackFile
     // Position uncertainty (gets larger as track ages without contact)
     public double PositionUncertaintyM { get; set; } = 500;
 
-    // ── Track history ─────────────────────────────────────────────────
+    // â”€â”€ Track history â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     public record TrackHistoryPoint(Vec2 Position, double AltitudeM, DateTime Time);
     public List<TrackHistoryPoint> History { get; } = new();
     private const int MaxHistory = 20;
 
-    // ── Track state ───────────────────────────────────────────────────
+    // â”€â”€ Track state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     public TrackQuality Quality { get; set; } = TrackQuality.Firm;
     public int DetectionCount { get; set; }     // Total number of detections
     public DateTime LastDetectionTime { get; set; } = DateTime.UtcNow;
@@ -61,23 +61,23 @@ public class TrackFile
         (DateTime.UtcNow - LastDetectionTime).TotalSeconds;
     internal bool DetectedThisUpdate { get; set; }
 
-    // ── IFF state ─────────────────────────────────────────────────────
+    // â”€â”€ IFF state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     public bool IFFInterrogated { get; set; }
     public bool IFFResponse { get; set; }   // Did it respond?
     public DateTime? IFFTime { get; set; }
 
-    // ── Engagement state ──────────────────────────────────────────────
+    // â”€â”€ Engagement state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     public bool IsDesignated { get; set; }   // Player has hard-locked this track
     public bool IsTrackHeld { get; set; }    // Player is keeping this track in TWS memory
     public bool IsBeingEngaged { get; set; } // SAM in flight to this track
     public string? AssignedMissileId { get; set; }
 
-    // ── Threat assessment ─────────────────────────────────────────────
+    // â”€â”€ Threat assessment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     public double ThreatLevel { get; set; } // 0-1, calculated by ThreatAssessor
     public double TimeToThreatSec { get; set; } // Estimated time to reach battery engagement zone
     public double ClosingSpeedMps { get; set; }  // Positive = closing
 
-    // ── Derived ───────────────────────────────────────────────────────
+    // â”€â”€ Derived â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     public double RangeNm => CoordinateSystem.MetersToNm(Position.Length);
     public double BearingDeg => CoordinateSystem.ToBearingRange(Position).bearingDeg;
     public double AltitudeFt => CoordinateSystem.MToFt(AltitudeM);
@@ -139,7 +139,7 @@ public class TrackFile
         SpeedMps = trueSpeed;
 
         Position = filteredPos;
-        AltitudeM = trueAlt + (rng.NextDouble() * 2 - 1) * 50; // ±50m altitude noise
+        AltitudeM = trueAlt + (rng.NextDouble() * 2 - 1) * 50; // Â±50m altitude noise
         AltitudeM = filteredAlt;
         PositionUncertaintyM = Math.Max(75, noiseM * (IsDesignated ? 0.45 : IsTrackHeld ? 0.65 : 0.9));
         LastDetectionTime = now;
@@ -153,7 +153,7 @@ public class TrackFile
             History.RemoveAt(0);
     }
 
-    /// <summary>Coast the track (no detection this sweep) — propagate using estimated velocity</summary>
+    /// <summary>Coast the track (no detection this sweep) â€” propagate using estimated velocity</summary>
     public void Coast(double deltaTime)
     {
         DateTime now = DateTime.UtcNow;
@@ -191,12 +191,15 @@ public class TrackFile
         Vec2 toOrigin = (Vec2.Zero - Position).Normalized();
         ClosingSpeedMps = Velocity.Dot(toOrigin);
 
-        // Time to engagement envelope (18nm default)
+        // Time to engagement envelope (18nm default).
+        // Require a meaningful closing component (>=50 m/s) to avoid near-perpendicular
+        // tracks producing astronomically large and ever-growing TTT values.
         double engagementRangeM = CoordinateSystem.NmToMeters(18);
-        if (ClosingSpeedMps > 0 && range > engagementRangeM)
+        const double minClosingMps = 50.0;
+        if (ClosingSpeedMps >= minClosingMps && range > engagementRangeM)
             TimeToThreatSec = (range - engagementRangeM) / ClosingSpeedMps;
         else
-            TimeToThreatSec = ClosingSpeedMps > 0 ? 0 : double.MaxValue;
+            TimeToThreatSec = ClosingSpeedMps >= minClosingMps ? 0 : double.MaxValue;
 
         double rangeThreat = Math.Clamp(1.0 - (range / CoordinateSystem.NmToMeters(65)), 0.0, 1.0);
         double closureThreat = Math.Clamp(ClosingSpeedMps / 320.0, 0.0, 1.0);
@@ -250,7 +253,7 @@ public class TrackManager
     public event Action<TrackFile>? TrackUpdated;
     public event Action<TrackFile>? TrackDropped;
 
-    // ── Main processing ────────────────────────────────────────────────
+    // â”€â”€ Main processing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// <summary>
     /// Process a new detection and either create a new track or update an existing one.
@@ -336,7 +339,7 @@ public class TrackManager
         }
     }
 
-    // ── Queries ───────────────────────────────────────────────────────
+    // â”€â”€ Queries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public IReadOnlyList<TrackFile> GetAllTracks() => _tracks.Values.ToList();
 
@@ -431,7 +434,7 @@ public class TrackManager
         }
     }
 
-    // ── Private helpers ───────────────────────────────────────────────
+    // â”€â”€ Private helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private TrackFile? FindCorrelatedTrack(Vec2 newPosition)
     {

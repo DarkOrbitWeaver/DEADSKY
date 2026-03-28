@@ -5,6 +5,7 @@ using System.Collections.Specialized;
 using DEADSKY.App.ViewModels;
 using DEADSKY.App.Views;
 using DEADSKY.Core.Logging;
+using DEADSKY.Core.Weapons;
 
 namespace DEADSKY.App;
 
@@ -17,6 +18,8 @@ public partial class MainWindow : Window
     private TacticalMapWindow? _tacticalMapWindow;
     private SettingsWindow? _settingsWindow;
     private LogisticsWindow? _logisticsWindow;
+    private bool _isUserScrolling = false;
+    private double _lastScrollOffset = 0;
 
     public MainWindow()
     {
@@ -49,6 +52,16 @@ public partial class MainWindow : Window
         MessageInput.KeyDown += OnMessageInputKeyDown;
         CommsTabs.SelectionChanged += OnCommsTabsSelectionChanged;
         ViewModel.AllMessagesRecent.CollectionChanged += OnMessagesChanged;
+        
+        // Add scroll tracking for smart auto-scroll
+        CommsList.Loaded += (s, e) =>
+        {
+            var scrollViewer = FindScrollViewer(CommsList);
+            if (scrollViewer != null)
+            {
+                scrollViewer.ScrollChanged += OnCommsListScrollChanged;
+            }
+        };
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -90,9 +103,64 @@ public partial class MainWindow : Window
         if (!ViewModel.IsCommsDrawerOpen || CommsTabs.SelectedIndex != 0 || CommsList.Items.Count == 0)
             return;
 
-        Dispatcher.BeginInvoke(
-            DispatcherPriority.Background,
-            new Action(() => CommsList.ScrollIntoView(CommsList.Items[^1])));
+        // Smart auto-scroll: only scroll if user is near the bottom (within 100px)
+        var scrollViewer = FindScrollViewer(CommsList);
+        if (scrollViewer != null)
+        {
+            double distanceFromBottom = scrollViewer.ScrollableHeight - scrollViewer.VerticalOffset;
+            if (distanceFromBottom <= 100 || !_isUserScrolling)
+            {
+                Dispatcher.BeginInvoke(
+                    DispatcherPriority.Background,
+                    new Action(() => CommsList.ScrollIntoView(CommsList.Items[^1])));
+            }
+        }
+        else
+        {
+            // Fallback to simple scroll if ScrollViewer not found
+            Dispatcher.BeginInvoke(
+                DispatcherPriority.Background,
+                new Action(() => CommsList.ScrollIntoView(CommsList.Items[^1])));
+        }
+    }
+
+    private void OnCommsListScrollChanged(object sender, System.Windows.Controls.ScrollChangedEventArgs e)
+    {
+        // Track if user is manually scrolling (not programmatic scroll)
+        if (e.VerticalChange != 0)
+        {
+            var scrollViewer = (System.Windows.Controls.ScrollViewer)sender;
+            double distanceFromBottom = scrollViewer.ScrollableHeight - scrollViewer.VerticalOffset;
+            
+            // User is scrolling up if offset decreased
+            if (scrollViewer.VerticalOffset < _lastScrollOffset)
+            {
+                _isUserScrolling = true;
+            }
+            // User scrolled to bottom
+            else if (distanceFromBottom < 1)
+            {
+                _isUserScrolling = false;
+            }
+            
+            _lastScrollOffset = scrollViewer.VerticalOffset;
+        }
+    }
+
+    private System.Windows.Controls.ScrollViewer? FindScrollViewer(System.Windows.DependencyObject obj)
+    {
+        if (obj is System.Windows.Controls.ScrollViewer scrollViewer)
+            return scrollViewer;
+
+        for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(obj); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(obj, i);
+            var result = FindScrollViewer(child);
+            if (result != null)
+                return result;
+        }
+
+        return null;
     }
 
     private void OnCommsTabsSelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -180,6 +248,33 @@ public partial class MainWindow : Window
                 }
                 e.Handled = true;
                 break;
+            case Key.D1:
+            case Key.NumPad1:
+                if (ViewModel.SelectWeaponCommand.CanExecute(WeaponCatalog.BaselineSarhWeaponId))
+                {
+                    GameLogger.Info("INPUT", "1 pressed - selecting 9M38 medium-range missile");
+                    ViewModel.SelectWeapon(WeaponCatalog.BaselineSarhWeaponId);
+                }
+                e.Handled = true;
+                break;
+            case Key.D2:
+            case Key.NumPad2:
+                if (ViewModel.SelectWeaponCommand.CanExecute(WeaponCatalog.LongRangeSarhWeaponId))
+                {
+                    GameLogger.Info("INPUT", "2 pressed - selecting 48N6 long-range missile");
+                    ViewModel.SelectWeapon(WeaponCatalog.LongRangeSarhWeaponId);
+                }
+                e.Handled = true;
+                break;
+            case Key.D3:
+            case Key.NumPad3:
+                if (ViewModel.SelectWeaponCommand.CanExecute(WeaponCatalog.ShortRangeIrWeaponId))
+                {
+                    GameLogger.Info("INPUT", "3 pressed - selecting 9M331-IR point-defense missile");
+                    ViewModel.SelectWeapon(WeaponCatalog.ShortRangeIrWeaponId);
+                }
+                e.Handled = true;
+                break;
             case Key.Q:
                 GameLogger.Info("INPUT", "Q pressed - setting radar to Search mode");
                 ViewModel.SetRadarSearch();
@@ -195,21 +290,21 @@ public partial class MainWindow : Window
                 ViewModel.SetRadarSilent();
                 e.Handled = true;
                 break;
-            case Key.D1:
-            case Key.NumPad1:
-                GameLogger.Info("INPUT", "1 pressed - setting radar range to 40nm");
+            case Key.D4:
+            case Key.NumPad4:
+                GameLogger.Info("INPUT", "4 pressed - setting radar range to 40nm");
                 ViewModel.SetRadarRangePreset("40");
                 e.Handled = true;
                 break;
-            case Key.D2:
-            case Key.NumPad2:
-                GameLogger.Info("INPUT", "2 pressed - setting radar range to 80nm");
+            case Key.D5:
+            case Key.NumPad5:
+                GameLogger.Info("INPUT", "5 pressed - setting radar range to 80nm");
                 ViewModel.SetRadarRangePreset("80");
                 e.Handled = true;
                 break;
-            case Key.D3:
-            case Key.NumPad3:
-                GameLogger.Info("INPUT", "3 pressed - setting radar range to 120nm");
+            case Key.D6:
+            case Key.NumPad6:
+                GameLogger.Info("INPUT", "6 pressed - setting radar range to 120nm");
                 ViewModel.SetRadarRangePreset("120");
                 e.Handled = true;
                 break;

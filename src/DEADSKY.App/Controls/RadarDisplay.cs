@@ -102,7 +102,7 @@ public class RadarDisplay : SKElement
     // Colors (cached SkiaSharp paints)
     private readonly SKPaint _bgPaint = new() { Color = new SKColor(5, 15, 5) };
     private readonly SKPaint _gridPaint = new() { Color = new SKColor(0, 80, 0, 180), IsStroke = true, StrokeWidth = 0.5f };
-    private readonly SKPaint _sweepPaint = new() { Color = new SKColor(0, 255, 0, 200), IsStroke = true, StrokeWidth = 2f };
+    private readonly SKPaint _sweepPaint = new() { Color = new SKColor(0, 255, 0, 200), IsStroke = true, StrokeWidth = 2f, IsAntialias = true };
     private readonly SKPaint _ringLabelPaint = new()
     {
         Color = new SKColor(0, 150, 0), IsAntialias = true,
@@ -564,7 +564,7 @@ public class RadarDisplay : SKElement
                 _trackLabelPaint.Color = track.HasFireControlAttention
                     ? new SKColor(210, 255, 210, 220)
                     : new SKColor(120, 200, 120, 190);
-                canvas.DrawText($"FL{track.AltitudeFt / 100:F0} / {track.SpeedKts:F0}KT", cx + 7, cy + 8, _trackLabelPaint);
+                canvas.DrawText($"{track.AltitudeFt * 0.3048 / 1000:F1}km / {track.SpeedKts * 1.852:F0}km/h", cx + 7, cy + 8, _trackLabelPaint);
                 _trackLabelPaint.TextSize = 9;
             }
         }
