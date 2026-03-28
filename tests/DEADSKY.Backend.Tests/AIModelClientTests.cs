@@ -171,7 +171,7 @@ public class AIModelClientTests
         Assert.Equal(2, handler.RequestBodies.Count);
         var retryBody = JsonNode.Parse(handler.RequestBodies[1]);
         Assert.NotNull(retryBody);
-        Assert.Equal(216, retryBody!["max_tokens"]!.GetValue<int>());
+        Assert.Equal(256, retryBody!["max_tokens"]!.GetValue<int>());
     }
 
     [Fact]

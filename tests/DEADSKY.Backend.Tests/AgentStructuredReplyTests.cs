@@ -75,8 +75,8 @@ public class AgentStructuredReplyTests
         var secondRequest = JsonNode.Parse(handler.RequestBodies[1]);
         Assert.NotNull(secondRequest);
         Assert.Equal("json_schema", secondRequest!["response_format"]!["type"]!.GetValue<string>());
-        Assert.Equal(56, firstRequest["max_tokens"]!.GetValue<int>());
-        Assert.Equal(64, secondRequest["max_tokens"]!.GetValue<int>());
+        Assert.Equal(512, firstRequest["max_tokens"]!.GetValue<int>());
+        Assert.Equal(512, secondRequest["max_tokens"]!.GetValue<int>());
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public class AgentStructuredReplyTests
         Assert.Single(handler.RequestBodies);
         var request = JsonNode.Parse(handler.RequestBodies[0]);
         Assert.NotNull(request);
-        Assert.Equal(96, request!["max_tokens"]!.GetValue<int>());
+        Assert.Equal(512, request!["max_tokens"]!.GetValue<int>());
     }
 
     private static string ToolCallResponse(string toolName, string argumentsJson) =>

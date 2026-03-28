@@ -117,7 +117,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _selectedTrackKinematicsText = "KINEMATICS: ---";
     [ObservableProperty] private string _selectedTrackTimeToThreatText = "TIME TO THREAT: ---";
     [ObservableProperty] private string _radarCursorReadout = "CURSOR BRAA: ---";
-    [ObservableProperty] private string _weatherSummary = "WX CLR | VIS 80NM | CEIL 25000FT";
+    [ObservableProperty] private string _weatherSummary = "WX CLR | VIS 148km | CEIL 7620m";
     [ObservableProperty] private string _missionPhaseText = "MISSION PHASE: STANDBY";
     [ObservableProperty] private string _objectiveStatusText = "OBJECTIVE: AWAITING BRIEFING";
     [ObservableProperty] private string _recommendationText = "RECOMMENDATION: MAINTAIN SEARCH PATTERN";
@@ -148,13 +148,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _radarPowerText = "POWER ON";
     [ObservableProperty] private string _radarEmissionText = "RADAR ACTIVE";
     [ObservableProperty] private string _radarCommsText = "COMMS GREEN";
-    [ObservableProperty] private string _radarRangeStatusText = "RANGE 080NM";
+    [ObservableProperty] private string _radarRangeStatusText = "RANGE 148km";
     [ObservableProperty] private string _radarSweepText = "SWEEP 000";
     [ObservableProperty] private string _trackHoldStatusText = "TRACK HOLD 0";
     [ObservableProperty] private bool _autoFocusSelectedTrack = true;
     [ObservableProperty] private bool _showRadarAltitudeLabels = true;
     [ObservableProperty] private bool _showRadarTrackTrails = true;
     [ObservableProperty] private bool _showTacticalMapLabels = true;
+
+    // ── Collapsible section states ─────────────────────────────────────
+    [ObservableProperty] private bool _isScopeControlExpanded = true;
+    [ObservableProperty] private bool _isFireControlExpanded = true;
+    [ObservableProperty] private bool _isWeaponsLoadoutExpanded = false;
+    [ObservableProperty] private bool _isEngagementControlExpanded = true;
+    [ObservableProperty] private bool _isMissionBoardExpanded = true;
+
+    // Track previous values for auto-expand detection
+    private int _previousReadyLaunchers = 4;
+    private BatteryAlertLevel _previousAlertLevel = BatteryAlertLevel.Yellow;
 
     // Alert level color (bound to header)
     [ObservableProperty] private string _alertColor = "#FFC800";
@@ -214,8 +225,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public MainViewModel()
     {
         Sim.Crew = Crew;
-        FriendlySupport = new FriendlySupportDirector(Sim.Comms);
-        Scenario = new ScenarioManager(Sim);
+        FriendlySupport = new FriendlySupportDirector(Sim.Comms, Sim.Entities, Sim.Radar);
+        Scenario = new ScenarioManager(Sim, _tactics);
         Events = new EventEngine(Sim, Crew);
         _tactics = new GroupTacticManager(Sim.Entities);
 
@@ -473,6 +484,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        FlushPendingRadioTraffic(); // Deliver queued messages when mission starts
         Sim.Start();
         SetMissionLifecycle(MissionLifecycleState.Active);
         IsCommandMenuOpen = false;
@@ -596,10 +608,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             Audio.Play(SoundEvent.MissileLaunch);
             SetStatus($"MISSILE AWAY - {SelectedTrackId}");
+            GameSessionLogger.Current?.OnPlayerAction("FIRE SINGLE", $"Track {SelectedTrackId} {SelectedTrack?.TrackDesignation} RNG {SelectedTrack?.RangeNm:0.0}nm");
         }
         else
         {
             SetStatus($"FIRE DENIED - {Sim.Weapons.LastError}");
+            GameSessionLogger.Current?.OnPlayerAction("FIRE DENIED", Sim.Weapons.LastError);
         }
 
         RefreshDerivedBindings();
@@ -621,10 +635,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             Audio.Play(SoundEvent.MissileLaunch);
             SetStatus($"SALVO x{fired} AWAY - {SelectedTrackId}");
+            GameSessionLogger.Current?.OnPlayerAction($"FIRE SALVO x{fired}", $"Track {SelectedTrackId} {SelectedTrack?.TrackDesignation} RNG {SelectedTrack?.RangeNm:0.0}nm");
         }
         else if (!string.IsNullOrWhiteSpace(Sim.Weapons.LastError))
         {
             SetStatus($"FIRE DENIED - {Sim.Weapons.LastError}");
+            GameSessionLogger.Current?.OnPlayerAction("SALVO DENIED", Sim.Weapons.LastError);
         }
 
         RefreshDerivedBindings();
@@ -774,8 +790,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void SelectRadarPoint(double bearingDeg, double rangeNm)
     {
-        RadarCursorReadout = $"CURSOR BRAA {bearingDeg:000}/{rangeNm:0.0}";
-        SetStatus($"CURSOR BRAA {bearingDeg:000}/{rangeNm:0.0}");
+        RadarCursorReadout = $"CURSOR BRAA {bearingDeg:000}/{rangeNm * 1.852:0.0}km";
+        SetStatus($"CURSOR BRAA {bearingDeg:000}/{rangeNm * 1.852:0.0}km");
     }
 
     private void FocusSelectedTrackIfNeeded()
@@ -788,7 +804,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
 
         Sim.PlayerSetRadarRange(focusRange);
-        RadarCursorReadout = $"TRACK FOCUS {SelectedTrack.BearingDeg:000}/{SelectedTrack.RangeNm:0.0}";
+        RadarCursorReadout = $"TRACK FOCUS {SelectedTrack.BearingDeg:000}/{SelectedTrack.RangeNm * 1.852:0.0}km";
     }
 
     private static double ChooseTrackFocusRange(double trackRangeNm)
@@ -807,7 +823,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var snapshot = Sim.LatestSnapshot;
         Scenario.Update(evt.GameTimeSec);
-        FriendlySupport.Tick(evt.DeltaTime, evt.GameTimeSec);
+        FriendlySupport.Tick(evt.DeltaTime, evt.GameTimeSec, snapshot);
         FriendlySupport.UpdateOperationalContext(Scenario.CurrentScenario, snapshot, Sim.Weapons.Incidents);
         Events.Update(evt.DeltaTime);
         Crew.Update(evt.DeltaTime,
@@ -878,9 +894,33 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var battery = snapshot.Battery;
         if (battery != null)
         {
+            // Check for launcher reload completion (auto-expand Weapons/Loadout section)
+            int currentReadyLaunchers = battery.ReadyLaunchers;
+            if (currentReadyLaunchers > _previousReadyLaunchers)
+            {
+                // A launcher just finished reloading
+                IsWeaponsLoadoutExpanded = true;
+            }
+            _previousReadyLaunchers = currentReadyLaunchers;
+            
             ReadyLaunchers = battery.ReadyLaunchers;
             ReserveMissiles = battery.ReserveMissiles;
             ConfirmedKills = battery.ConfirmedKills;
+            
+            // Check for alert level change to HIGH or CRITICAL (auto-expand Mission Board section)
+            BatteryAlertLevel currentAlertLevel = battery.AlertLevel;
+            if (currentAlertLevel != _previousAlertLevel)
+            {
+                // Auto-expand Mission Board when alert level changes to Orange (HIGH), Red (CRITICAL), or Black (CRITICAL)
+                if (currentAlertLevel == BatteryAlertLevel.Orange || 
+                    currentAlertLevel == BatteryAlertLevel.Red || 
+                    currentAlertLevel == BatteryAlertLevel.Black)
+                {
+                    IsMissionBoardExpanded = true;
+                }
+                _previousAlertLevel = currentAlertLevel;
+            }
+            
             AlertLevelText = battery.AlertLevel.ToString().ToUpper();
             RoeText = battery.ROE.ToString().Replace("Weapons", "WEAPONS ").ToUpper();
             RadarModeText = battery.RadarMode.ToString().ToUpper();
@@ -889,7 +929,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ? $"RADAR {battery.RadarMode.ToString().ToUpper()}"
                 : $"RADAR {battery.RadarMode.ToString().ToUpper()} / OFF AIR";
             RadarCommsText = battery.CommsOnline ? "COMMS GREEN" : "COMMS DEGRADED";
-            RadarRangeStatusText = $"RANGE {snapshot.RadarRangeNm:000}NM";
+            RadarRangeStatusText = $"RANGE {snapshot.RadarRangeNm * 1.852:0}km";
             RadarSweepText = $"SWEEP {snapshot.RadarSweepAngle:000}";
             TrackHoldStatusText = $"TRACK HOLD {snapshot.AllTracks.Count(track => track.IsTrackHeld || track.IsDesignated)}";
             AlertColor = battery.AlertLevel switch
@@ -973,6 +1013,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 SetStatus($"NEW CONTACT: {evt.TrackId} [{evt.Classification}]");
                 PushNotification("RADAR", "NEW CONTACT", $"{evt.TrackId} classified {evt.Classification}.", NotificationSeverity.Warning);
                 LogOps("CONTACT", $"{evt.TrackId} classified {evt.Classification}.");
+                
+                // Auto-expand Engagement Control section when a new threat is detected
+                IsEngagementControlExpanded = true;
+                
                 GameLogger.Info("UI-EVENT", $"OnNewContact completed successfully for {evt.TrackId}");
             }
             catch (Exception ex)
@@ -1034,6 +1078,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             SetStatus($"ROE CHANGE: {evt.NewROE.Replace("Weapons", "WEAPONS ")}");
             PushNotification("ROE", "RULES UPDATED", $"{evt.NewROE.Replace("Weapons", "WEAPONS ")} authorized by {evt.AuthorizedBy}.", NotificationSeverity.Warning);
             LogOps("ROE", $"ROE updated to {evt.NewROE.Replace("Weapons", "WEAPONS ")} by {evt.AuthorizedBy}.");
+            
+            // Auto-expand Fire Control section when ROE changes to WEAPONS TIGHT or WEAPONS FREE
+            if (evt.NewROE.Contains("WeaponsTight", StringComparison.OrdinalIgnoreCase) ||
+                evt.NewROE.Contains("WeaponsFree", StringComparison.OrdinalIgnoreCase))
+            {
+                IsFireControlExpanded = true;
+            }
         });
     }
 
@@ -1190,6 +1241,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Audio.Play(SoundEvent.RadioSquelchOpen);
         SetStatus($"{channel.ToString().ToUpper()}: {content}");
         ApplyManualMessageConsequences(channel, content);
+        GameSessionLogger.Current?.OnPlayerAction($"RADIO [{channel}]", content);
 
         if (AI != null && aiReady)
         {
@@ -1299,12 +1351,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string countermeasureState = targetAircraft == null
             ? "CM CLEAN"
             : targetAircraft.IsChaffActive || targetAircraft.IsFlareActive || targetAircraft.ECMActive
-                ? $"CM ACTIVE {(targetAircraft.IsChaffActive ? "CHAFF " : string.Empty)}{(targetAircraft.IsFlareActive ? "FLARE " : string.Empty)}{(targetAircraft.ECMActive ? "ECM" : string.Empty)}".Trim()
-                : "CM CLEAN";
+                ? $"CM ACTIVE {(targetAircraft.IsChaffActive ? $"CHAFF({targetAircraft.ChaffCharges}) " : string.Empty)}{(targetAircraft.IsFlareActive ? $"FLARE({targetAircraft.FlareCharges}) " : string.Empty)}{(targetAircraft.ECMActive ? "ECM" : string.Empty)}".Trim()
+                : $"CM CLEAN (C:{targetAircraft.ChaffCharges} F:{targetAircraft.FlareCharges})";
         SelectedTrackStatusText = $"STATUS: {advisory.StateLabel} | {advisory.TagsText} | {(pictureContext?.RecommendedAction ?? threatState?.Summary ?? "SEARCH PICTURE")}";
         SelectedTrackMissionText = $"MISSION: {packageLabel} | {roleLabel} | {objectiveLabel} | AXIS {entryLabel}";
         SelectedTrackControlText = $"CONTROL: {BuildTrackRetentionLabel(SelectedTrack)} | {fireControl.FireStatusText} | {countermeasureState} | {AbortAvailabilityText.Replace("ABORT: ", string.Empty)} | {(pictureContext?.CommandCaveats ?? string.Empty)}".TrimEnd();
-        SelectedTrackKinematicsText = $"KINEMATICS: ALT {SelectedTrack.AltitudeFt / 1000:0.0}KFT | SPD {SelectedTrack.SpeedKts:0}KT | UNC {SelectedTrack.PositionUncertaintyM / 1000:0.0}KM | {(CurrentSnapshot?.SelectedWeapon?.ShortCode ?? "9M38")}";
+        SelectedTrackKinematicsText = $"KINEMATICS: ALT {SelectedTrack.AltitudeFt * 0.3048 / 1000:0.0}km | SPD {SelectedTrack.SpeedKts * 1.852:0}km/h | UNC {SelectedTrack.PositionUncertaintyM / 1000:0.0}km | {(CurrentSnapshot?.SelectedWeapon?.ShortCode ?? "9M38")}";
         SelectedTrackTimeToThreatText = advisory.TimeToThreatText;
         SelectedTrackEnvelopeText = $"FIRE CONTROL: {fireControl.FireStatusText} | {fireControl.LockStatusText} | {fireControl.RangeStatusText} | {(pictureContext?.WeaponGating ?? "NO SHOT DATA")}";
     }
@@ -1473,7 +1525,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         RadarPowerText = "POWER ON";
         RadarEmissionText = "RADAR ACTIVE";
         RadarCommsText = "COMMS GREEN";
-        RadarRangeStatusText = "RANGE 080NM";
+        RadarRangeStatusText = "RANGE 148km";
         RadarSweepText = "SWEEP 000";
         TrackHoldStatusText = "TRACK HOLD 0";
         OpsFeed.Clear();
@@ -1486,6 +1538,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void LoadScenarioDefinition(ScenarioDefinition scenario, bool isRealisticMode)
     {
         ResetUiForScenarioLoad();
+        // Start a fresh verbose session log for this game
+        GameSessionLogger.StartSession();
+        GameSessionLogger.Current?.OnScenarioLoaded(scenario, isRealisticMode);
         Scenario.LoadScenario(scenario);
         ApplyOwnedRequisitionsToCurrentBattery();
         EnsureSectorStateForCurrentScenario();
@@ -1499,7 +1554,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         RadarCursorReadout = "CURSOR BRAA: ---";
         IsCommandMenuOpen = true;
         SetMissionLifecycle(MissionLifecycleState.Briefing);
-        FlushPendingRadioTraffic();
+        // Don't flush radio traffic here - let it be delivered when mission starts
         RefreshFromSimulationSnapshot();
         SetStatus($"SCENARIO LOADED: {scenario.Name}");
         LogOps("BRIEF", scenario.Description.Length > 0 ? scenario.Description : $"Scenario {scenario.Name} loaded.");
@@ -1655,7 +1710,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     };
 
     private static string BuildWeatherSummary(SimulationSnapshot snapshot) =>
-        $"WX {snapshot.Weather.Description.ToUpper()} | VIS {snapshot.Weather.VisibilityNm:0}NM | CEIL {snapshot.Weather.CloudCeilingFt:0}FT";
+        $"WX {snapshot.Weather.Description.ToUpper()} | VIS {snapshot.Weather.VisibilityNm * 1.852:0}km | CEIL {snapshot.Weather.CloudCeilingFt * 0.3048:0}m";
 
     private string BuildFallbackCrewLine(Soldier responder, string content)
     {
@@ -1687,13 +1742,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (Application.Current.Dispatcher.CheckAccess())
         {
             GameLogger.Debug("UI-DISPATCH", "Already on UI thread, executing directly");
-            action();
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                GameLogger.Error("UI-DISPATCH", $"Error executing action on UI thread: {ex.Message}");
+            }
         }
         else
         {
-            GameLogger.Debug("UI-DISPATCH", "Not on UI thread, dispatching with Normal priority");
-            // CRITICAL FIX: Use Normal priority instead of Background to prevent UI freeze
-            Application.Current.Dispatcher.Invoke(action, DispatcherPriority.Normal);
+            GameLogger.Debug("UI-DISPATCH", "Not on UI thread, dispatching async with Normal priority");
+            // CRITICAL FIX: Use BeginInvoke (async) instead of Invoke (blocking) to prevent deadlocks
+            Application.Current.Dispatcher.BeginInvoke(action, DispatcherPriority.Normal);
         }
     }
 
@@ -1960,18 +2022,22 @@ public partial class TrackRowViewModel : ObservableObject
     [ObservableProperty] private bool _isBeingEngaged;
     [ObservableProperty] private bool _hasNoIff;
     [ObservableProperty] private string _qualityLabel = "FIRM";
+    
+    // Expose TrackFile for converters that need full track data
+    [ObservableProperty] private TrackFile? _trackFile;
 
     public TrackRowViewModel(TrackFile track) { Update(track); }
 
     public void Update(TrackFile track)
     {
+        TrackFile = track; // Store reference for converters
         TrackId = track.TrackId;
         Designation = track.TrackDesignation;
         Classification = track.Classification.ToString().ToUpper();
         Bearing = $"{track.BearingDeg:000}";
-        RangeText = $"{track.RangeNm:F1}";
-        AltitudeText = $"FL{track.AltitudeFt / 100:F0}";
-        SpeedText = $"{track.SpeedKts:F0}";
+        RangeText = $"{track.RangeNm * 1.852:F0}km";
+        AltitudeText = $"{track.AltitudeFt * 0.3048 / 1000:F1}km";
+        SpeedText = $"{track.SpeedKts * 1.852:F0}";
         ThreatText = track.ThreatLevel > 0.7 ? "HIGH" : track.ThreatLevel > 0.4 ? "MED" : "LOW";
         Aspect = track.AspectString;
         PackageLabel = string.IsNullOrWhiteSpace(track.GroupLabel) ? "UNATTRIBUTED" : track.GroupLabel.ToUpperInvariant();
